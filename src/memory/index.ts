@@ -11,14 +11,19 @@ export {
   filterByProject,
   decayConfidence,
   searchAndSortFragments,
+  filterFragments,
   formatMemoryForLLM,
   formatMemoryDetail,
   boostOnAccess,
   recordNegativeHit,
   trackAssociations,
+  addRelation,
   setMemoryDir,
   calculateStats,
   formatStats,
   auditMemory,
-  formatAuditReport
+  formatAuditReport,
+  findTopicOverlaps
 } from "./core.js";
+
+export { scanForSecrets, redactSecrets } from "./privacy.js";

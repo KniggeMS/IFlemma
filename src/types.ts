@@ -1,3 +1,10 @@
+export interface MemoryRelation {
+  id: string;
+  type: "contradicts" | "supersedes" | "supports" | "related_to";
+  note?: string;
+  created: string;
+}
+
 export interface MemoryFragment {
   id: string;
   title: string;
@@ -11,6 +18,7 @@ export interface MemoryFragment {
   accessed: number;
   tags: string[];
   associatedWith: string[];
+  relations: MemoryRelation[];
   negativeHits: number;
   quality_score: number | null;
   refinement_count: number;

@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import Fuse from "fuse.js";
-import type { MemoryFragment, MemoryStats, AuditResult } from "../types.js";
+import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult } from "../types.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
 let MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
@@ -59,6 +59,7 @@ export function createFragment(fragment: string, source: "user" | "ai", title: s
     accessed: 0,
     tags: [],
     associatedWith: [],
+    relations: [],
     negativeHits: 0,
     quality_score: null,
     refinement_count: 0,
@@ -94,6 +95,30 @@ export function findSimilarFragment(fragments: MemoryFragment[], fragmentText: s
   }
 
   return null;
+}
+
+export function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: string, project: string | null, limit = 5): MemoryFragment[] {
+  const scopedFragments = filterByProject(fragments, project);
+  if (scopedFragments.length === 0) return [];
+
+  const fuse = new Fuse(scopedFragments, {
+    keys: ['fragment', 'title'],
+    threshold: 0.6,
+    includeScore: true,
+    ignoreLocation: true,
+  });
+
+  const fuseResults = fuse.search(fragmentText, { limit });
+  const overlaps: MemoryFragment[] = [];
+
+  for (const result of fuseResults) {
+    const similarity = 1 - (result.score || 1);
+    if (similarity >= 0.4 && similarity < 0.65) {
+      overlaps.push(result.item);
+    }
+  }
+
+  return overlaps;
 }
 
 export function boostOnAccess(fragment: MemoryFragment, context: string | null = null): MemoryFragment {
@@ -141,6 +166,36 @@ export function trackAssociations(fragments: MemoryFragment[], accessedId: strin
     }
   }
   target.associatedWith = [...existing];
+}
+
+export function addRelation(fragments: MemoryFragment[], sourceId: string, targetId: string, type: MemoryRelation["type"], note?: string): boolean {
+  const source = fragments.find(f => f.id === sourceId);
+  const target = fragments.find(f => f.id === targetId);
+  if (!source || !target) return false;
+
+  source.relations = source.relations || [];
+  const exists = source.relations.find(r => r.id === targetId && r.type === type);
+  if (exists) return false;
+
+  source.relations.push({
+    id: targetId,
+    type,
+    note: note || undefined,
+    created: new Date().toISOString().split("T")[0] || "",
+  });
+
+  target.relations = target.relations || [];
+  const reverseExists = target.relations.find(r => r.id === sourceId);
+  if (!reverseExists) {
+    target.relations.push({
+      id: sourceId,
+      type: "related_to",
+      note: `Reverse of ${type}`,
+      created: new Date().toISOString().split("T")[0] || "",
+    });
+  }
+
+  return true;
 }
 
 export function loadMemory(): MemoryFragment[] {
@@ -296,12 +351,19 @@ export function decayConfidence(fragments: MemoryFragment[]): MemoryFragment[] {
     });
 }
 
+function injectionScore(fragment: MemoryFragment): number {
+  const confidence = fragment.confidence;
+  const daysSinceCreated = (Date.now() - new Date(fragment.created).getTime()) / 86400000;
+  const recency = Math.max(0, 1 - daysSinceCreated / 180);
+  return confidence * 0.7 + recency * 0.3;
+}
+
 export function searchAndSortFragments(fragments: MemoryFragment[], query: string | null = null, topK = 30): MemoryFragment[] {
   const nowDate = new Date().toISOString();
 
   if (!query) {
     const sorted = [...fragments]
-      .sort((a, b) => b.confidence - a.confidence)
+      .sort((a, b) => injectionScore(b) - injectionScore(a))
       .slice(0, topK);
 
     sorted.forEach(frag => { frag.lastAccessed = nowDate; });
@@ -326,17 +388,54 @@ export function searchAndSortFragments(fragments: MemoryFragment[], query: strin
 
   if (fuseResults.length > 0) {
     const topResults = fuseResults.map(r => r.item);
-    topResults.sort((a, b) => b.confidence - a.confidence);
+    topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
     topResults.forEach(frag => { frag.lastAccessed = nowDate; });
     return topResults;
   }
 
   const fallback = [...fragments]
-    .sort((a, b) => b.confidence - a.confidence)
+    .sort((a, b) => injectionScore(b) - injectionScore(a))
     .slice(0, topK);
 
   fallback.forEach(frag => { frag.lastAccessed = nowDate; });
   return fallback;
+}
+
+export function filterFragments(
+  fragments: MemoryFragment[],
+  options: {
+    minConfidence?: number;
+    afterDate?: string;
+    beforeDate?: string;
+  } = {}
+): MemoryFragment[] {
+  let result = fragments;
+
+  if (options.minConfidence !== undefined && options.minConfidence !== null) {
+    result = result.filter(f => f.confidence >= options.minConfidence!);
+  }
+
+  if (options.afterDate) {
+    const after = new Date(options.afterDate);
+    if (!isNaN(after.getTime())) {
+      result = result.filter(f => {
+        const created = new Date(f.created);
+        return !isNaN(created.getTime()) && created >= after;
+      });
+    }
+  }
+
+  if (options.beforeDate) {
+    const before = new Date(options.beforeDate);
+    if (!isNaN(before.getTime())) {
+      result = result.filter(f => {
+        const created = new Date(f.created);
+        return !isNaN(created.getTime()) && created <= before;
+      });
+    }
+  }
+
+  return result;
 }
 
 export function formatMemoryForLLM(fragments: MemoryFragment[], currentProject: string | null = null): string {
@@ -377,6 +476,12 @@ export function formatMemoryDetail(fragment: MemoryFragment | null): string {
   }
   if (fragment.associatedWith && fragment.associatedWith.length > 0) {
     detail += `Related: ${fragment.associatedWith.join(", ")}\n`;
+  }
+  if (fragment.relations && fragment.relations.length > 0) {
+    detail += `Relations:\n`;
+    for (const rel of fragment.relations) {
+      detail += `  ${rel.type} → [${rel.id}]${rel.note ? ` — ${rel.note}` : ""}\n`;
+    }
   }
   if (fragment.positive_feedback > 0 || fragment.negative_feedback > 0) {
     detail += `Feedback: ${fragment.positive_feedback || 0} positive, ${fragment.negative_feedback || 0} negative\n`;
@@ -467,6 +572,14 @@ export function auditMemory(fragments: MemoryFragment[]): AuditResult {
       for (const assocId of f.associatedWith) {
         if (!ids.has(assocId) && !fragments.find(x => x.id === assocId)) {
           issues.push(`Fragment [${f.id}] references non-existent associated fragment [${assocId}]`);
+        }
+      }
+    }
+
+    if (f.relations) {
+      for (const rel of f.relations) {
+        if (!ids.has(rel.id) && !fragments.find(x => x.id === rel.id)) {
+          issues.push(`Fragment [${f.id}] has relation to non-existent fragment [${rel.id}]`);
         }
       }
     }

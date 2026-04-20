@@ -21,7 +21,7 @@ export interface ToolDefinition {
 export const TOOLS: ToolDefinition[] = [
   {
     name: "session_start",
-    description: "Start a traced work session. Records task metadata and returns relevant guides and memories for the task.",
+    description: "Start a traced work session. Records task metadata and returns relevant guides and pre-loaded memories for the task.",
     inputSchema: {
       type: "object",
       properties: {
@@ -97,6 +97,18 @@ export const TOOLS: ToolDefinition[] = [
           items: { type: "string" },
           description: "Get full details for multiple fragment IDs at once. Optional.",
         },
+        minConfidence: {
+          type: "number",
+          description: "Minimum confidence threshold (0-1). Only return fragments with confidence >= this value. Optional.",
+        },
+        afterDate: {
+          type: "string",
+          description: "ISO date string (e.g., '2026-04-01'). Only return fragments created on or after this date. Optional.",
+        },
+        beforeDate: {
+          type: "string",
+          description: "ISO date string (e.g., '2026-04-30'). Only return fragments created on or before this date. Optional.",
+        },
       },
     },
   },
@@ -127,6 +139,11 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Source of the memory (default: 'ai')",
           default: "ai",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Set to true to store fragment as-is even if secrets are detected. Default: false (auto-redacts).",
+          default: false,
         },
       },
       required: ["fragment"],
@@ -216,6 +233,33 @@ export const TOOLS: ToolDefinition[] = [
         },
       },
       required: ["ids", "title", "fragment"],
+    },
+  },
+  {
+    name: "memory_relate",
+    description: "Create a typed relation between two memory fragments. Types: 'contradicts' (opposing claims), 'supersedes' (replaces), 'supports' (reinforces), 'related_to' (general connection).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceId: {
+          type: "string",
+          description: "ID of the source fragment",
+        },
+        targetId: {
+          type: "string",
+          description: "ID of the target fragment",
+        },
+        type: {
+          type: "string",
+          enum: ["contradicts", "supersedes", "supports", "related_to"],
+          description: "Type of relation",
+        },
+        note: {
+          type: "string",
+          description: "Optional note explaining the relation",
+        },
+      },
+      required: ["sourceId", "targetId", "type"],
     },
   },
   {

@@ -230,9 +230,9 @@ npm install
 
 ---
 
-## Available Tools (20)
+## Available Tools (21)
 
-### Memory Tools (10)
+### Memory Tools (11)
 
 #### `memory_read`
 
@@ -245,10 +245,13 @@ Read memory fragments. SUMMARY MODE shows title + description; use `id` for full
 - `ids` (string[], optional): Get full details for multiple fragments at once
 - `context` (string, optional): Tag this access with a context (e.g., "debugging")
 - `all` (boolean, optional): Show fragments from all projects (default: false)
+- `minConfidence` (number, optional): Minimum confidence threshold (0-1)
+- `afterDate` (string, optional): ISO date — only fragments created on or after
+- `beforeDate` (string, optional): ISO date — only fragments created on or before
 
 #### `memory_add`
 
-**MANDATORY:** Call AFTER completing analysis to save findings.
+**MANDATORY:** Call AFTER completing analysis to save findings. Automatically redacts secrets unless `confirm: true`.
 
 **Parameters:**
 - `fragment` (string, required): The memory text to store
@@ -256,6 +259,7 @@ Read memory fragments. SUMMARY MODE shows title + description; use `id` for full
 - `description` (string, optional): Short summary
 - `project` (string, optional): Project scope (null = global)
 - `source` (string, optional): "user" or "ai", default "ai"
+- `confirm` (boolean, optional): Store as-is even if secrets detected (default: false)
 
 #### `memory_update`
 
@@ -291,6 +295,16 @@ Merge multiple fragments into one. Creates new ID, deletes originals.
 - `title` (string, required): Title for merged fragment
 - `fragment` (string, required): Merged content
 - `project` (string, optional): Project scope
+
+#### `memory_relate`
+
+Create a typed relation between two memory fragments.
+
+**Parameters:**
+- `sourceId` (string, required): Source fragment ID
+- `targetId` (string, required): Target fragment ID
+- `type` (string, required): One of `contradicts`, `supersedes`, `supports`, `related_to`
+- `note` (string, optional): Note explaining the relation
 
 #### `memory_stats`
 
@@ -383,7 +397,7 @@ Merge multiple guides into one. Usage counts are summed.
 
 #### `session_start`
 
-Start a traced work session. Records task metadata and returns relevant guides.
+Start a traced work session. Records task metadata and returns relevant guides + pre-loaded memories.
 
 **Parameters:**
 - `task_type` (string, required): "debugging", "implementation", "refactoring", "testing", "research", "documentation", "optimization", or "other"
@@ -435,7 +449,7 @@ Get virtual session statistics: recent tool usage patterns and technologies.
 npm test
 ```
 
-360 tests covering memory core, guides core, handlers, learning lifecycle, hook system, dynamic prompt generation, and virtual sessions. All I/O is isolated to temp directories.
+415 tests covering memory core, guides core, handlers, learning lifecycle, hook system, dynamic prompt generation, virtual sessions, privacy filtering, query filters, topic overlap, relations, injection ranking, and session pre-loading. All I/O is isolated to temp directories.
 
 ```bash
 npm run typecheck   # TypeScript type checking
@@ -451,8 +465,9 @@ Lemma/
 │   ├── types.ts              # Shared TypeScript interfaces
 │   ├── memory/
 │   │   ├── index.ts          # Memory module re-exports
-│   │   ├── core.ts           # Core memory logic, decay, search, dedup
-│   │   └── config.ts         # User configuration loader
+│   │   ├── core.ts           # Core memory logic, decay, search, dedup, relations
+│   │   ├── config.ts         # User configuration loader
+│   │   └── privacy.ts        # Secret scanning and redaction
 │   ├── guides/
 │   │   ├── index.ts          # Guides module re-exports
 │   │   ├── core.ts           # Core guides logic, fuzzy dedup

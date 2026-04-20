@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.8.1] - 2026-04-20
+
+### Added — Active Memory Engine
+
+Inspired by [LLM Wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) (@rohitg00). Six features transforming Lemma from a passive memory store into an active memory engine.
+
+- **Privacy Filtering** — `memory_add` automatically scans for secrets (API keys, tokens, passwords, connection strings, private keys) and redacts them with `[REDACTED:type]` labels. Use `confirm: true` to store as-is.
+  - 17 regex patterns: OpenAI keys, GitHub tokens, Slack tokens, AWS keys, MongoDB/PostgreSQL/MySQL/Redis connection strings, webhook secrets, Bearer tokens, private keys, password assignments
+  - New file: `src/memory/privacy.ts` with `scanForSecrets()` and `redactSecrets()`
+  - New param: `confirm` on `memory_add`
+
+- **Query Filters** — `memory_read` now supports `minConfidence`, `afterDate`, and `beforeDate` parameters for structured querying.
+  - "What did I learn last week?" → `afterDate="2026-04-13"`
+  - "High-confidence memories only" → `minConfidence=0.7`
+  - New function: `filterFragments()` in core
+
+- **Smart session_start** — `session_start` now pre-loads top-3 relevant memories based on task_type + technologies, so the LLM sees relevant context immediately without calling `memory_read`.
+  - Fragments are searched via `searchAndSortFragments(taskDesc, 3)` and included in response
+  - Pre-loaded fragments get confidence boost (via `boostOnAccess`)
+
+- **Topic Overlap Detection** — `memory_add` now detects topic-related (but not duplicate) fragments and suggests them in the response.
+  - Uses Fuse.js with 40-65% similarity range (below dedup threshold)
+  - New function: `findTopicOverlaps()` in core
+  - Suggestions include fragment ID, title, and confidence
+  - Prompts: "Does this update or contradict existing knowledge?"
+
+- **Typed Relations** — New `memory_relate` tool creates typed links between fragments.
+  - Relation types: `contradicts`, `supersedes`, `supports`, `related_to`
+  - Bidirectional: reverse relation auto-created on target
+  - New interface: `MemoryRelation` in types.ts
+  - New field: `relations: MemoryRelation[]` on MemoryFragment
+  - `formatMemoryDetail` shows relations
+  - `memory_audit` detects orphan relations
+  - Tool count: 20 → 21
+
+- **Injection Ranking** — Memory injection now uses composite score instead of pure confidence.
+  - Formula: `confidence * 0.7 + recency * 0.3` where recency decays over 180 days
+  - Recent knowledge (2 days old, 0.72 confidence) now surfaces above old knowledge (6 months, 0.95)
+  - Applied in all 3 sort paths of `searchAndSortFragments`
+
+### Changed
+- `src/types.ts` — Added `MemoryRelation` interface and `relations` field on `MemoryFragment`
+- `src/memory/core.ts` — Added `filterFragments`, `findTopicOverlaps`, `addRelation`, `injectionScore`, updated `formatMemoryDetail`, `auditMemory`
+- `src/memory/index.ts` — New exports: `scanForSecrets`, `redactSecrets`, `filterFragments`, `findTopicOverlaps`, `addRelation`
+- `src/server/handlers.ts` — Updated `handleMemoryAdd` (privacy + overlap), `handleMemoryRead` (filters), `handleSessionStart` (pre-load), new `handleMemoryRelate`
+- `src/server/tools.ts` — Updated tool definitions, added `memory_relate`
+
+### Tests
+- **415 tests** passing (+55 from 360), 0 failures
+- New test files: `privacy.test.ts` (14), `filter.test.ts` (11), `session-preload.test.ts` (5), `topic-overlap.test.ts` (5), `relations.test.ts` (9), `injection-ranking.test.ts` (5)
+
+### Documentation
+- Added `docs/llm-wiki-v2.md` — LLM Wiki v2 reference document by @rohitg00
+
+---
+
 ## [0.7.4] - 2026-04-19
 
 ### Fixed

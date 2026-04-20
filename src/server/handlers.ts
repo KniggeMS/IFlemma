@@ -27,6 +27,9 @@ interface MemoryReadArgs {
   context?: string;
   all?: boolean;
   ids?: string[];
+  minConfidence?: number;
+  afterDate?: string;
+  beforeDate?: string;
 }
 
 interface MemoryAddArgs {
@@ -35,6 +38,7 @@ interface MemoryAddArgs {
   description?: string;
   project?: string | null;
   source?: string;
+  confirm?: boolean;
 }
 
 interface MemoryUpdateArgs {
@@ -58,6 +62,13 @@ interface MemoryMergeArgs {
   title?: string;
   fragment?: string;
   project?: string | null;
+}
+
+interface MemoryRelateArgs {
+  sourceId?: string;
+  targetId?: string;
+  type?: string;
+  note?: string;
 }
 
 interface MemoryStatsArgs {
@@ -170,10 +181,30 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   const suggestions = guides.suggestGuides(taskDesc, allGuides);
   const formattedSuggestions = guides.formatSuggestions(suggestions);
 
+  const allMemory = core.loadMemory();
+  const projectMemory = core.filterByProject(allMemory, core.detectProject());
+  const relevantResults = core.searchAndSortFragments(projectMemory, taskDesc, 3);
+
+  for (const frag of relevantResults) {
+    const boosted = core.boostOnAccess(frag);
+    Object.assign(frag, boosted);
+  }
+  core.saveMemory(allMemory);
+
   let response = `Session started: ${session.session_id} (${taskType})\n`;
   if (technologies.length > 0) {
     response += `Technologies: ${technologies.join(", ")}\n`;
   }
+
+  if (relevantResults.length > 0) {
+    response += `\nPre-loaded memories:\n`;
+    for (const frag of relevantResults) {
+      const scopeTag = frag.project || "global";
+      response += `  [${frag.id}] [${scopeTag}] ${frag.title} (${frag.confidence.toFixed(2)})\n`;
+      response += `    ${frag.description}\n`;
+    }
+  }
+
   response += `\n${formattedSuggestions}`;
 
   return {
@@ -299,7 +330,13 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     ? memory
     : core.filterByProject(memory, currentProject);
 
-  const results = core.searchAndSortFragments(filteredMemory, query, 30);
+  let results = core.searchAndSortFragments(filteredMemory, query, 30);
+
+  results = core.filterFragments(results, {
+    minConfidence: args?.minConfidence,
+    afterDate: args?.afterDate,
+    beforeDate: args?.beforeDate,
+  });
 
   const resultIds = new Set((results as any[]).map((r: any) => r.id));
   for (const frag of memory) {
@@ -345,7 +382,11 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     };
   }
 
-  const newFragment = core.createFragment(fragment, source, title, project, description);
+  const { redacted, found } = core.redactSecrets(fragment);
+  const hasSecrets = found.length > 0;
+  const finalFragment = hasSecrets && !args?.confirm ? redacted : fragment;
+
+  const newFragment = core.createFragment(finalFragment, source, title, project, description);
   if (activeSessionId) {
     const allSessions = sessions.loadSessions();
     const session = sessions.findSession(allSessions, activeSessionId);
@@ -361,9 +402,22 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   core.saveMemory(memory);
   notifyMemoryChange();
 
+  const overlaps = core.findTopicOverlaps(memory, finalFragment, project, 5);
+
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
+  let response = `Added fragment [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nSummary: ${newFragment.description}`;
+  if (hasSecrets) {
+    response += `\n\n⚠️ Privacy: ${found.length} potential secret(s) detected and auto-redacted: ${found.map(f => f.type).join(", ")}. Use confirm: true to store as-is.`;
+  }
+  if (overlaps.length > 0) {
+    response += `\n\n⚡ Potentially related memories:`;
+    for (const overlap of overlaps) {
+      response += `\n  [${overlap.id}] "${overlap.title}" (${overlap.confidence.toFixed(2)})`;
+    }
+    response += `\nConsider: Does this update or contradict existing knowledge? Use memory_update to refine or memory_merge to consolidate.`;
+  }
   return {
-    content: [{ type: "text", text: `Added fragment [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nSummary: ${newFragment.description}` }],
+    content: [{ type: "text", text: response }],
   };
 }
 
@@ -553,6 +607,66 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
   return {
     content: [{ type: "text", text: `Merged ${ids.length} fragments into [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nRemoved IDs: ${ids.join(", ")}` }],
+  };
+}
+
+export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolResult> {
+  const sourceId = args?.sourceId;
+  const targetId = args?.targetId;
+  const type = args?.type;
+  const note = args?.note;
+
+  if (!sourceId || !targetId || !type) {
+    return {
+      content: [{ type: "text", text: "Error: 'sourceId', 'targetId', and 'type' parameters are required" }],
+      isError: true,
+    };
+  }
+
+  const validTypes = ["contradicts", "supersedes", "supports", "related_to"];
+  if (!validTypes.includes(type)) {
+    return {
+      content: [{ type: "text", text: `Error: 'type' must be one of: ${validTypes.join(", ")}` }],
+      isError: true,
+    };
+  }
+
+  if (sourceId === targetId) {
+    return {
+      content: [{ type: "text", text: "Error: sourceId and targetId cannot be the same" }],
+      isError: true,
+    };
+  }
+
+  const memory = core.loadMemory();
+
+  if (!memory.find((f: any) => f.id === sourceId)) {
+    return {
+      content: [{ type: "text", text: `Error: Source fragment [${sourceId}] not found` }],
+      isError: true,
+    };
+  }
+
+  if (!memory.find((f: any) => f.id === targetId)) {
+    return {
+      content: [{ type: "text", text: `Error: Target fragment [${targetId}] not found` }],
+      isError: true,
+    };
+  }
+
+  const success = core.addRelation(memory, sourceId, targetId, type as any, note || undefined);
+  if (!success) {
+    return {
+      content: [{ type: "text", text: `Relation already exists between [${sourceId}] and [${targetId}] with type '${type}'` }],
+      isError: true,
+    };
+  }
+
+  core.saveMemory(memory);
+  notifyMemoryChange();
+
+  return {
+    content: [{ type: "text", text: `Created relation: [${sourceId}] --${type}--> [${targetId}]${note ? ` (${note})` : ""}` }],
   };
 }
 
@@ -904,6 +1018,8 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
         return await handleMemoryFeedback(args as MemoryFeedbackArgs);
       case "memory_merge":
         return await handleMemoryMerge(args as MemoryMergeArgs);
+      case "memory_relate":
+        return await handleMemoryRelate(args as MemoryRelateArgs);
       case "memory_stats":
         return await handleMemoryStats(args as MemoryStatsArgs);
       case "memory_audit":

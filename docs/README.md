@@ -23,6 +23,7 @@ Academic papers and research documents that influenced and continue to guide Lem
 ## Architecture References
 
 - **[llm-wiki](./llm-wiki.md)** — Karpathy's LLM Wiki pattern. Inspired `memory_audit` (wiki health-check), universal memory injection (always-available knowledge), and the 3-layer injection architecture.
+- **[llm-wiki-v2](./llm-wiki-v2.md)** — LLM Wiki v2 by [@rohitg00](https://github.com/rohitg00). Extended patterns from production experience that inspired v0.8.1: privacy filtering, typed relations, topic overlap detection, injection ranking, smart session start, and query filters.
 - **[self-improvement-architecture](./self-improvement-architecture.md)** — Internal design notes mapping research concepts to Lemma's implementation.
 
 ## How These Relate to Lemma
@@ -31,10 +32,15 @@ Academic papers and research documents that influenced and continue to guide Lem
 |---|---|
 | Self-distillation | `guide_distill` — memory fragment → guide learning |
 | Memory decay | `decayConfidence` — biological forgetting curve |
-| Access-based reinforcement | `boostOnAccess` — confidence +0.1 on use |
-| Negative feedback | `recordNegativeHit` — confidence -0.1 |
+| Access-based reinforcement | `boostOnAccess` — confidence +0.015 on use |
+| Negative feedback | `recordNegativeHit` — confidence -0.02 |
 | Association tracking | `trackAssociations` — bidirectional cross-references |
 | Self-critique / audit | `memory_audit` — orphan detection, anomaly detection |
 | Knowledge compounding | `guide_merge` / `memory_merge` — consolidation |
 | Always-available knowledge | Universal tool description injection |
 | Session-based learning | `session_start` / `session_end` + virtual sessions |
+| Privacy governance | `privacy.ts` — 17 regex patterns, auto-redact on ingest |
+| Typed relations (v2) | `memory_relate` — contradicts, supersedes, supports, related_to |
+| Contradiction detection (v2) | `findTopicOverlaps` — 40-65% similarity range suggestions |
+| Lifecycle injection (v2) | Composite ranking — confidence × recency |
+| Smart context loading (v2) | `session_start` pre-loads top-3 relevant memories |

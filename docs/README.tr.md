@@ -230,9 +230,9 @@ npm install
 
 ---
 
-## Mevcut Araçlar (20)
+## Mevcut Araçlar (21)
 
-### Bellek Araçları (10)
+### Bellek Araçları (11)
 
 #### `memory_read`
 
@@ -245,10 +245,13 @@ Bellek fragmanlarını okur. ÖZET MODU sadece başlık + açıklama gösterir; 
 - `ids` (string[], opsiyonel): Birden fazla fragmanın tam detaylarını al
 - `context` (string, opsiyonel): Bu erişimi bir bağlamla etiketle (örn. "debugging")
 - `all` (boolean, opsiyonel): Tüm projelerden fragmanları göster (varsayılan: false)
+- `minConfidence` (number, opsiyonel): Minimum güven eşiği (0-1)
+- `afterDate` (string, opsiyonel): ISO tarih — bu tarihte veya sonrasında oluşturulanlar
+- `beforeDate` (string, opsiyonel): ISO tarih — bu tarihte veya öncesinde oluşturulanlar
 
 #### `memory_add`
 
-**ZORUNLU:** Analizi tamamladıktan SONRA bulguları kaydetmek için çağır.
+**ZORUNLU:** Analizi tamamladıktan SONRA bulguları kaydetmek için çağır. Gizli bilgileri otomatik olarak sansürler, `confirm: true` ile olduğu gibi saklayabilirsiniz.
 
 **Parametreler:**
 - `fragment` (string, zorunlu): Saklanacak bellek metni
@@ -256,6 +259,7 @@ Bellek fragmanlarını okur. ÖZET MODU sadece başlık + açıklama gösterir; 
 - `description` (string, opsiyonel): Kısa özet
 - `project` (string, opsiyonel): Proje kapsamı (null = küresel)
 - `source` (string, opsiyonel): "user" veya "ai", varsayılan "ai"
+- `confirm` (boolean, opsiyonel): Gizli bilgi tespit edilse de olduğu gibi sakla (varsayılan: false)
 
 #### `memory_update`
 
@@ -291,6 +295,16 @@ Birden fazla fragmanı birleştir. Yeni ID oluşturur, orijinalleri siler.
 - `title` (string, zorunlu): Birleştirilmiş fragmanın başlığı
 - `fragment` (string, zorunlu): Birleştirilmiş içerik
 - `project` (string, opsiyonel): Proje kapsamı
+
+#### `memory_relate`
+
+İki bellek fragmanı arasında tipli ilişki oluştur.
+
+**Parametreler:**
+- `sourceId` (string, zorunlu): Kaynak fragman ID'si
+- `targetId` (string, zorunlu): Hedef fragman ID'si
+- `type` (string, zorunlu): `contradicts`, `supersedes`, `supports` veya `related_to`
+- `note` (string, opsiyonel): İlişkiyi açıklayan not
 
 #### `memory_stats`
 
@@ -383,7 +397,7 @@ Birden fazla rehberi birleştir. Kullanım sayıları toplanır.
 
 #### `session_start`
 
-İzlenen bir çalışma oturumu başlat. Görev metaverisini kaydeder ve ilgili rehberleri getirir.
+İzlenen bir çalışma oturumu başlat. Görev metaverisini kaydeder, ilgili rehberleri ve önceden yüklenmiş bellekleri getirir.
 
 **Parametreler:**
 - `task_type` (string, zorunlu): "debugging", "implementation", "refactoring", "testing", "research", "documentation", "optimization" veya "other"
@@ -435,7 +449,7 @@ Sanal oturum istatistiklerini getir: son araç kullanım örüntüleri ve teknol
 npm test
 ```
 
-360 test: bellek çekirdeği, rehber çekirdeği, işleyiciler, öğrenme yaşam döngüsü, hook sistemi, dinamik istem oluşturma ve sanal oturumları kapsar. Tüm I/O geçici dizinlere izole edilir.
+415 test: bellek çekirdeği, rehber çekirdeği, işleyiciler, öğrenme yaşam döngüsü, hook sistemi, dinamik istem oluşturma, sanal oturumlar, gizlilik filtreleme, sorgu filtreleri, konu örtüşmesi, ilişkiler, enjeksiyon sıralaması ve oturum önyüklemesi kapsar. Tüm I/O geçici dizinlere izole edilir.
 
 ```bash
 npm run typecheck   # TypeScript tip kontrolü
@@ -451,15 +465,16 @@ Lemma/
 │   ├── types.ts              # Paylaşılan TypeScript arayüzleri
 │   ├── memory/
 │   │   ├── index.ts          # Bellek modülü yeniden dışa aktarmalar
-│   │   ├── core.ts           # Temel bellek mantığı, çürüme, arama, tekilleştirme
-│   │   └── config.ts         # Kullanıcı yapılandırma yükleyici
+│   │   ├── core.ts           # Temel bellek mantığı, çürüme, arama, tekilleştirme, ilişkiler
+│   │   ├── config.ts         # Kullanıcı yapılandırma yükleyici
+│   │   └── privacy.ts        # Gizli bilgi tarama ve sansürleme
 │   ├── guides/
 │   │   ├── index.ts          # Rehber modülü yeniden dışa aktarmalar
 │   │   ├── core.ts           # Temel rehber mantığı, bulanık tekilleştirme
 │   │   └── task-map.ts       # Görev-rehber eşlemesi
 │   ├── server/
 │   │   ├── index.ts          # Sunucu kurulumu, enjeksiyon, bildirimler
-│   │   ├── handlers.ts       # Araç işleyicileri (20 araç)
+│   │   ├── handlers.ts       # Araç işleyicileri (21 araç)
 │   │   ├── tools.ts          # Araç tanımları
 │   │   ├── hooks.ts          # Hook sistemi ve istem değiştiriciler
 │   │   └── system-prompt.ts  # Dinamik sistem istemi
