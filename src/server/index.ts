@@ -382,22 +382,22 @@ export async function startServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
+  let notifyTimer: ReturnType<typeof setTimeout> | null = null;
   setNotifyChange(() => {
-    try {
-      server.notification({
-        method: "notifications/tools/list_changed",
-      });
-    } catch {}
-    try {
+    if (notifyTimer) clearTimeout(notifyTimer);
+    notifyTimer = setTimeout(() => {
+      notifyTimer = null;
+      server.notification({ method: "notifications/tools/list_changed" }).catch(() => {});
       server.notification({
         method: "notifications/resources/updated",
         params: { uri: "lemma://context/current" },
-      });
-    } catch {}
+      }).catch(() => {});
+    }, 100);
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]!.replace(/\\/g, '/')}`) {
+const argv1 = process.argv[1];
+if (argv1 && import.meta.url === `file://${argv1.replace(/\\/g, '/')}`) {
   startServer().catch((error: unknown) => {
     console.error("Fatal error:", error);
     process.exit(1);

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.2] - 2026-04-23
+
+### Fixed
+- **Critical: MCP -32000 ConnectionClosed on write operations** — `memory_add`, `guide_practice` and other write tools were timing out or crashing MCP clients (Hermes, opencode).
+  - **Root cause**: `notifyMemoryChange()` called `server.notification()` (async) without `await`, causing unhandled promise rejections that could crash the server process. Additionally, every write immediately sent 2 notifications, triggering expensive `tools/list` rebuilds on the client side.
+  - **Debounce**: Notifications are now delayed 100ms and coalesced — multiple rapid writes produce a single notification instead of one per write.
+  - **Error handling**: `.catch(() => {})` added to prevent unhandled rejections from killing the process.
+- **`process.argv[1]` crash on module import** — Non-null assertion (`process.argv[1]!`) caused `TypeError: Cannot read properties of undefined` when the module was imported without a script argument. Fixed with explicit null check.
+
+### Changed
+- `src/server/index.ts` — `setNotifyChange` callback rewritten with `setTimeout` debounce + proper async error handling
+- `src/server/index.ts` — `process.argv[1]!` replaced with safe null-checked variable
+
+### Tests
+- **415 tests** passing, 0 failures
+
+---
+
 ## [0.8.1] - 2026-04-20
 
 ### Added — Active Memory Engine
