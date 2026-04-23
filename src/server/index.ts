@@ -18,6 +18,7 @@ import { handleCallTool } from "./handlers.js";
 import { triggerHook, HookTypes } from "./hooks.js";
 import * as core_config from "../memory/config.js";
 import { setNotifyChange } from "./handlers.js";
+import { logger, initLogger } from "../logger.js";
 
 export let detectedProject: string | null = null;
 
@@ -331,24 +332,39 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
-  const result = await handleCallTool(request);
+  const toolName = (request.params as any).name as string;
+  const start = Date.now();
   try {
-    virtualSession.recordToolCall(
-      (request.params as any).name,
-      (request.params as any).arguments,
-      result
-    );
-  } catch {}
-  return result;
+    const result = await handleCallTool(request);
+    const duration = Date.now() - start;
+    logger.toolCall(toolName, (request.params as any).arguments, duration);
+    if (result.isError) {
+      const text = result.content?.[0]?.text || "";
+      logger.warn(`Tool ${toolName} returned error: ${text}`);
+    }
+    try {
+      virtualSession.recordToolCall(
+        toolName,
+        (request.params as any).arguments,
+        result
+      );
+    } catch {}
+    return result;
+  } catch (error) {
+    const duration = Date.now() - start;
+    logger.error(`Tool ${toolName} threw after ${duration}ms: ${(error as Error).message}`);
+    throw error;
+  }
 }) as any);
 
 async function initializeContext(): Promise<void> {
+  initLogger();
   const cfg = core_config.loadConfig();
   virtualSession.setVirtualSessionConfig(cfg.virtual_session);
 
   const migrated = core.migrateConfidenceFloor();
   if (migrated > 0) {
-    console.error(`[Lemma] Migration: boosted ${migrated} fragments to 0.3 floor`);
+    logger.info(`Migration: boosted ${migrated} fragments to 0.3 floor`);
   }
 
   core.applySessionDecay();
@@ -356,18 +372,18 @@ async function initializeContext(): Promise<void> {
   detectedProject = core.detectProject();
 
   if (detectedProject) {
-    console.error(`[Lemma] Detected project: ${detectedProject}`);
+    logger.info(`Detected project: ${detectedProject}`);
 
     const memory: any[] = core.loadMemory();
     const projectFragments = core.filterByProject(memory, detectedProject);
 
     if (projectFragments.length > 0) {
-      console.error(`[Lemma] Found ${projectFragments.length} memory fragment(s) for this project`);
+      logger.info(`Found ${projectFragments.length} memory fragment(s) for this project`);
     } else {
-      console.error(`[Lemma] No saved memories for this project yet`);
+      logger.info(`No saved memories for this project yet`);
     }
   } else {
-    console.error(`[Lemma] No project detected (running in global context)`);
+    logger.info(`No project detected (running in global context)`);
   }
 
   await triggerHook(HookTypes.ON_START, {
@@ -381,17 +397,23 @@ export async function startServer(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  logger.info("Server connected via stdio transport");
 
   let notifyTimer: ReturnType<typeof setTimeout> | null = null;
   setNotifyChange(() => {
     if (notifyTimer) clearTimeout(notifyTimer);
     notifyTimer = setTimeout(() => {
       notifyTimer = null;
-      server.notification({ method: "notifications/tools/list_changed" }).catch(() => {});
+      logger.debug("Sending debounced notifications");
+      server.notification({ method: "notifications/tools/list_changed" }).catch((e) => {
+        logger.error("Failed to send tools/list_changed notification", (e as Error).message);
+      });
       server.notification({
         method: "notifications/resources/updated",
         params: { uri: "lemma://context/current" },
-      }).catch(() => {});
+      }).catch((e) => {
+        logger.error("Failed to send resources/updated notification", (e as Error).message);
+      });
     }, 100);
   });
 }
@@ -399,7 +421,7 @@ export async function startServer(): Promise<void> {
 const argv1 = process.argv[1];
 if (argv1 && import.meta.url === `file://${argv1.replace(/\\/g, '/')}`) {
   startServer().catch((error: unknown) => {
-    console.error("Fatal error:", error);
+    logger.error("Fatal error on startup", (error as Error).message);
     process.exit(1);
   });
 }

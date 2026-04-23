@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.3] - 2026-04-23
+
+### Added
+- **Logging system** — All MCP operations now logged to `~/.lemma/logs/` for debugging.
+  - Daily log rotation: `lemma-YYYY-MM-DD.log`
+  - Auto-cleanup: keeps last 7 log files
+  - Tool calls logged with name, args (truncated), and duration (ms)
+  - Errors and warnings logged with full context
+  - Notification failures logged (was silently swallowed)
+  - New module: `src/logger.ts` with `logger.info/warn/error/debug/toolCall`
+
+### Changed
+- **README** — Quick Start section moved to top, `npx -y lemma-mcp@latest` instead of `npx -y lemma-mcp` to ensure auto-updates
+- **README** — Manual Installation now references `dist/index.js` (not `src/index.js`)
+- **README** — opencode config path added
+- `src/server/index.ts` — All `console.error` calls replaced with structured `logger` calls
+
+### Tests
+- **415 tests** passing, 0 failures
+
+---
+
 ## [0.8.2] - 2026-04-23
 
 ### Fixed

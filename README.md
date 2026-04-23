@@ -8,6 +8,29 @@
 
 Lemma is a Model Context Protocol (MCP) server that provides a persistent memory layer for Large Language Models. It enables LLMs to remember facts, preferences, and context across sessions through a biological memory model with automatic decay, learning, and universal injection.
 
+## Quick Start
+
+Add Lemma to your MCP client configuration:
+
+**Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
+**Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**opencode:** `%APPDATA%\opencode\opencode.json`
+
+```json
+{
+  "mcpServers": {
+    "lemma": {
+      "command": "npx",
+      "args": ["-y", "lemma-mcp@latest"]
+    }
+  }
+}
+```
+
+> Using `@latest` ensures npx always fetches the newest version. Without it, npx caches the first version it downloads.
+
+**Requirements:** Node.js 18.0.0 or higher
+
 ## What is Lemma?
 
 Lemma acts as an external hippocampus for AI assistants. The human brain does not record everything — it synthesizes, distills, and leaves behind fragments. Frequently accessed knowledge grows stronger; unused knowledge fades and is forgotten.
@@ -148,31 +171,10 @@ Files:
 - `guides.jsonl` — experience guides
 - `config.json` — user configuration (optional)
 - `sessions/` — virtual session logs
+- `logs/` — debug and error logs (auto-rotated daily)
 - `.bak` files — cumulative backups
 
-## Quick Start
-
-Add Lemma to your MCP client configuration:
-
-**Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
-**Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "lemma": {
-      "command": "npx",
-      "args": ["-y", "lemma-mcp"]
-    }
-  }
-}
-```
-
----
-
 ## Hook System
-
-Lemma provides a pluggable hook system for extending server behavior:
 
 ### Lifecycle Hooks
 
@@ -207,22 +209,20 @@ registerPromptModifier(async (prompt, context) => {
 
 ## Manual Installation
 
+Clone and run locally:
+
 ```bash
 git clone https://github.com/xenitV1/lemma
 cd Lemma
 npm install
 ```
 
-**Requirements:** Node.js 18.0.0 or higher
-
-### Local Configuration
-
 ```json
 {
   "mcpServers": {
     "lemma": {
       "command": "node",
-      "args": ["C:\\path\\to\\Lemma\\src\\index.js"]
+      "args": ["C:\\path\\to\\Lemma\\dist\\index.js"]
     }
   }
 }
