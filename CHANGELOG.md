@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.8.4] - 2026-04-23
+
+### Added
+- **Comprehensive flow logging** — Every internal flow now logged step-by-step for full observability and debugging.
+  - `logger.flow()` — Named flow steps (e.g. `[FLOW] [memory_injection] loaded_memory {count: 15}`)
+  - `logger.request/response()` — MCP request/response lifecycle with timing
+  - `logger.notify()` — Notification state tracking (debounced, sending, failed)
+  - `logger.data()` — File I/O operations (load/save with counts)
+  - `logger.inject()` — Context injection summaries (tokens, fragment counts)
+
+### Changed
+- **`src/server/handlers.ts`** — All 21 handlers instrumented with entry/decision/exit logging
+- **`src/server/index.ts`** — `buildToolsWithMemory`, `buildDynamicInstructions`, initialize, resources, notification debounce fully logged
+- **`src/server/hooks.ts`** — Hook trigger, prompt modifier lifecycle logged
+- **`src/server/system-prompt.ts`** — Dynamic prompt build pipeline logged
+- **`src/memory/core.ts`** — load, save, search, dedup, decay, boost, relation operations logged
+- **`src/memory/config.ts`** — Config load logged
+- **`src/guides/core.ts`** — load, save, practice, suggest, merge logged
+- **`src/sessions/core.ts`** — load, save, create, end logged
+- **`src/sessions/virtual.ts`** — record, finalize, timeout logged
+
+### Tests
+- **415 tests** passing, 0 failures (no test changes needed — logging is non-breaking)
+
+---
+
 ## [0.8.3] - 2026-04-23
 
 ### Added

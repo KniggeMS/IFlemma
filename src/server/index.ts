@@ -56,13 +56,27 @@ export function buildToolsWithMemory(): ToolDefinition[] {
   const memoryIdx = tools.findIndex(t => t.name === "memory_read");
   if (memoryIdx === -1) return tools;
 
+  logger.flow("build_tools", "entry", { project: detectedProject });
+
   const config = core_config.loadConfig();
+  logger.flow("build_tools", "config_loaded", {
+    token_budget: config.token_budget.full_content || 3000,
+    max_fragments: config.injection.max_full_content_fragments || 15,
+    max_guides: config.injection.max_guides || 20,
+  });
+
   const memory: any[] = core.loadMemory();
   const projectName = detectedProject;
 
   const allSorted = projectName
     ? (core.filterByProject(memory, projectName) as any[]).sort((a: any, b: any) => b.confidence - a.confidence)
     : (core.filterByProject(memory, null) as any[]).sort((a: any, b: any) => b.confidence - a.confidence);
+
+  logger.flow("build_tools", "memory_loaded", {
+    total_fragments: memory.length,
+    filtered_count: allSorted.length,
+    project: projectName,
+  });
 
   let contextBlock = "";
   let tokensUsed = 0;
@@ -86,6 +100,12 @@ export function buildToolsWithMemory(): ToolDefinition[] {
       injectedIds.add(frag.id);
     }
 
+    logger.flow("build_tools", "injection_loop", {
+      fragments_injected: count,
+      tokens_used: tokensUsed,
+      budget,
+    });
+
     const remaining = allSorted.filter((f: any) => !injectedIds.has(f.id)).slice(0, config.injection.max_summary_fragments || 30);
     if (remaining.length > 0) {
       contextBlock += `---\nADDITIONAL (call memory_read for details):\n`;
@@ -94,6 +114,10 @@ export function buildToolsWithMemory(): ToolDefinition[] {
         contextBlock += `[${frag.id}] ${scope} ${frag.title}\n`;
       }
     }
+
+    logger.flow("build_tools", "summary_index", {
+      remaining_count: remaining.length,
+    });
   }
 
   const allGuides: any[] = guides.loadGuides();
@@ -106,6 +130,11 @@ export function buildToolsWithMemory(): ToolDefinition[] {
     }
   }
 
+  logger.flow("build_tools", "guides_injected", {
+    guide_count: topGuides.length,
+    top_guides: topGuides.slice(0, 5).map((g: any) => g.guide),
+  });
+
   if (contextBlock) {
     tools[memoryIdx] = {
       ...tools[memoryIdx]!,
@@ -113,10 +142,16 @@ export function buildToolsWithMemory(): ToolDefinition[] {
     };
   }
 
+  logger.inject("tool_description", tokensUsed, count, {
+    total_guides: topGuides.length,
+  });
+
   return tools;
 }
 
 export function buildDynamicInstructions(projectName: string | null): string {
+  logger.flow("build_instructions", "entry", { project: projectName });
+
   const config = core_config.loadConfig();
   const memory: any[] = core.loadMemory();
 
@@ -147,6 +182,11 @@ export function buildDynamicInstructions(projectName: string | null): string {
     fullContentIds.add(frag.id);
   }
 
+  logger.flow("build_instructions", "full_content", {
+    fragments: fullContentParts.length,
+    tokens: tokensUsed,
+  });
+
   if (fullContentParts.length > 0) {
     instructions += `## What You Already Know (no need to call memory_read for these)\n\n`;
     for (const part of fullContentParts) {
@@ -171,6 +211,10 @@ export function buildDynamicInstructions(projectName: string | null): string {
     instructions += "\n";
   }
 
+  logger.flow("build_instructions", "summary_index", {
+    remaining_count: remaining.length,
+  });
+
   if (topGuides.length > 0) {
     const maxDetail = config.injection.max_guide_detail;
     const guideBudget = config.token_budget.guides_detail;
@@ -179,6 +223,7 @@ export function buildDynamicInstructions(projectName: string | null): string {
 
     let guideTokens = 0;
     let detailCount = 0;
+    let compactCount = 0;
     for (const guide of topGuides) {
       if (detailCount < maxDetail && guide.description && guide.description.length > 20) {
         const entry = `### ${guide.guide} (${guide.category}) — ${guide.usage_count}x used\n`;
@@ -195,8 +240,15 @@ export function buildDynamicInstructions(projectName: string | null): string {
       }
 
       instructions += `- ${guide.guide} (${guide.category}) — ${guide.usage_count}x used\n`;
+      compactCount++;
     }
     instructions += `\nUse \`guide_get guide="<name>"\` for full guide details.\n\n`;
+
+    logger.flow("build_instructions", "guides", {
+      detailed: detailCount,
+      compact: compactCount,
+      guide_tokens: guideTokens,
+    });
   }
 
   if (projectName) {
@@ -211,17 +263,30 @@ export function buildDynamicInstructions(projectName: string | null): string {
 
   instructions += `\n**RULE:** Call \`memory_add\` AFTER learning something new. If you skip this, the knowledge is lost forever — you will NOT remember it next session.`;
 
+  logger.flow("build_instructions", "complete", {
+    instruction_length: instructions.length,
+  });
+
   return instructions;
 }
 
 server.setRequestHandler(InitializeRequestSchema, async (_request) => {
+  logger.request("initialize");
+
   detectedProject = core.detectProject();
+
+  logger.flow("initialize", "project_detected", { project: detectedProject });
 
   if (detectedProject) {
     console.error(`[Lemma] Detected project: ${detectedProject}`);
   }
 
   const instructions = buildDynamicInstructions(detectedProject);
+
+  logger.response("initialize", false, 0, {
+    instruction_length: instructions.length,
+    project: detectedProject,
+  });
 
   return {
     protocolVersion: "2024-11-05",
@@ -257,13 +322,18 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
     },
   ];
 
+  logger.flow("resources/list", "responded", { count: resources.length });
+
   return { resources };
 });
 
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const { uri } = request.params as { uri: string };
 
+  logger.flow("resources/read", "requested", { uri });
+
   if (uri === "lemma://system-prompt") {
+    logger.flow("resources/read", "system-prompt", { uri });
     return {
       contents: [
         {
@@ -276,6 +346,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   }
 
   if (uri === "lemma://context/current") {
+    logger.flow("resources/read", "context/current", { uri });
     const contextStr = buildDynamicInstructions(detectedProject);
     return {
       contents: [
@@ -290,6 +361,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
   if (uri.startsWith("lemma://memory/")) {
     const id = uri.replace("lemma://memory/", "");
+    logger.flow("resources/read", "memory/id", { uri, memory_id: id });
     const memory: any[] = core.loadMemory();
     const fragment = memory.find((f: any) => f.id === id);
 
@@ -310,6 +382,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
   if (uri.startsWith("lemma://guides/")) {
     const guideName = uri.replace("lemma://guides/", "").toLowerCase();
+    logger.flow("resources/read", "guides/name", { uri, guide: guideName });
     const allGuides: any[] = guides.loadGuides();
     const guide = allGuides.find((g: any) => g.guide === guideName);
 
@@ -328,12 +401,27 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   }
 
+  logger.flow("resources/read", "unknown", { uri });
   throw new Error(`Unknown resource: ${uri}`);
 });
 
 server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
   const toolName = (request.params as any).name as string;
   const start = Date.now();
+
+  const argsSummary: Record<string, unknown> = {};
+  const rawArgs = (request.params as any).arguments;
+  if (rawArgs) {
+    for (const [k, v] of Object.entries(rawArgs)) {
+      if (typeof v === "string" && (v as string).length > 80) {
+        argsSummary[k] = (v as string).substring(0, 80) + "...";
+      } else {
+        argsSummary[k] = v;
+      }
+    }
+  }
+  logger.request("tools/call", { name: toolName, args_summary: argsSummary });
+
   try {
     const result = await handleCallTool(request);
     const duration = Date.now() - start;
@@ -342,6 +430,7 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
       const text = result.content?.[0]?.text || "";
       logger.warn(`Tool ${toolName} returned error: ${text}`);
     }
+    logger.response("tools/call", !!result.isError, duration, { tool: toolName });
     try {
       virtualSession.recordToolCall(
         toolName,
@@ -353,21 +442,35 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
   } catch (error) {
     const duration = Date.now() - start;
     logger.error(`Tool ${toolName} threw after ${duration}ms: ${(error as Error).message}`);
+    logger.response("tools/call", true, duration, { tool: toolName });
     throw error;
   }
 }) as any);
 
 async function initializeContext(): Promise<void> {
   initLogger();
+  logger.flow("initialize_context", "entry");
+
   const cfg = core_config.loadConfig();
+  logger.flow("initialize_context", "config_loaded", {
+    token_budget_full: cfg.token_budget.full_content,
+    virtual_session_timeout: cfg.virtual_session.timeout_minutes,
+    max_full_content_fragments: cfg.injection.max_full_content_fragments,
+  });
+
   virtualSession.setVirtualSessionConfig(cfg.virtual_session);
+  logger.flow("initialize_context", "virtual_session_config_set");
 
   const migrated = core.migrateConfidenceFloor();
   if (migrated > 0) {
     logger.info(`Migration: boosted ${migrated} fragments to 0.3 floor`);
+    logger.flow("initialize_context", "migration", { migrated });
+  } else {
+    logger.flow("initialize_context", "migration", { migrated: 0 });
   }
 
   core.applySessionDecay();
+  logger.flow("initialize_context", "decay_applied");
 
   detectedProject = core.detectProject();
 
@@ -386,36 +489,48 @@ async function initializeContext(): Promise<void> {
     logger.info(`No project detected (running in global context)`);
   }
 
+  logger.flow("initialize_context", "hook_trigger", { hook: HookTypes.ON_START });
   await triggerHook(HookTypes.ON_START, {
     project: detectedProject,
     timestamp: new Date().toISOString(),
   });
+  logger.flow("initialize_context", "complete");
 }
 
 export async function startServer(): Promise<void> {
+  logger.flow("server", "starting");
   await initializeContext();
 
+  logger.flow("server", "creating_transport");
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("Server connected via stdio transport");
+  logger.flow("server", "connected");
 
   let notifyTimer: ReturnType<typeof setTimeout> | null = null;
   setNotifyChange(() => {
     if (notifyTimer) clearTimeout(notifyTimer);
     notifyTimer = setTimeout(() => {
       notifyTimer = null;
-      logger.debug("Sending debounced notifications");
-      server.notification({ method: "notifications/tools/list_changed" }).catch((e) => {
-        logger.error("Failed to send tools/list_changed notification", (e as Error).message);
+      logger.notify("notifications/tools/list_changed", "debounced");
+      server.notification({ method: "notifications/tools/list_changed" }).then(() => {
+        logger.notify("notifications/tools/list_changed", "sending");
+      }).catch((e) => {
+        logger.notify("notifications/tools/list_changed", "failed", (e as Error).message);
       });
+      logger.notify("notifications/resources/updated", "debounced");
       server.notification({
         method: "notifications/resources/updated",
         params: { uri: "lemma://context/current" },
+      }).then(() => {
+        logger.notify("notifications/resources/updated", "sending");
       }).catch((e) => {
-        logger.error("Failed to send resources/updated notification", (e as Error).message);
+        logger.notify("notifications/resources/updated", "failed", (e as Error).message);
       });
     }, 100);
   });
+
+  logger.flow("server", "notify_callback_set");
 }
 
 const argv1 = process.argv[1];

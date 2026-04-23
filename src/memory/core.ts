@@ -4,6 +4,7 @@ import fs from "fs";
 import crypto from "crypto";
 import Fuse from "fuse.js";
 import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult } from "../types.js";
+import { logger } from "../logger.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
 let MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
@@ -21,7 +22,9 @@ export function detectProject(): string | null {
   try {
     const cwd = process.cwd();
     const projectName = path.basename(cwd);
-    return projectName || null;
+    const result = projectName || null;
+    logger.flow("detect", "project", { project: result });
+    return result;
   } catch {
     return null;
   }
@@ -45,9 +48,12 @@ export function createFragment(fragment: string, source: "user" | "ai", title: s
   const autoDescription = description || generateDescription(fragment, autoTitle);
 
   const now = new Date();
+  const id = generateId();
+
+  logger.flow("fragment", "create", { id, title: autoTitle, project });
 
   return {
-    id: generateId(),
+    id: id,
     title: autoTitle,
     description: autoDescription,
     fragment: fragment,
@@ -78,6 +84,8 @@ export function findSimilarFragment(fragments: MemoryFragment[], fragmentText: s
   const scopedFragments = filterByProject(fragments, project);
   if (scopedFragments.length === 0) return null;
 
+  logger.flow("dedup", "checking", { threshold, scopedCount: scopedFragments.length });
+
   const fuse = new Fuse(scopedFragments, {
     keys: ['fragment', 'title'],
     threshold: 0.3,
@@ -90,16 +98,20 @@ export function findSimilarFragment(fragments: MemoryFragment[], fragmentText: s
   for (const result of fuseResults) {
     const similarity = 1 - (result.score || 1);
     if (similarity >= threshold) {
+      logger.flow("dedup", "found_similar", { id: result.item.id, similarity });
       return result.item;
     }
   }
 
+  logger.flow("dedup", "no_similar");
   return null;
 }
 
 export function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: string, project: string | null, limit = 5): MemoryFragment[] {
   const scopedFragments = filterByProject(fragments, project);
   if (scopedFragments.length === 0) return [];
+
+  logger.flow("overlap", "searching", { scopedCount: scopedFragments.length });
 
   const fuse = new Fuse(scopedFragments, {
     keys: ['fragment', 'title'],
@@ -118,6 +130,7 @@ export function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: str
     }
   }
 
+  logger.flow("overlap", "found", { count: overlaps.length });
   return overlaps;
 }
 
@@ -126,6 +139,8 @@ export function boostOnAccess(fragment: MemoryFragment, context: string | null =
   boosted.confidence = Math.min(1.0, boosted.confidence + 0.015);
   boosted.accessed++;
   boosted.lastAccessed = new Date().toISOString();
+
+  logger.flow("confidence", "boost", { id: fragment.id, from: fragment.confidence, to: boosted.confidence });
 
   if (context && typeof context === "string") {
     const tags = boosted.tags || [];
@@ -139,12 +154,14 @@ export function boostOnAccess(fragment: MemoryFragment, context: string | null =
 }
 
 export function recordNegativeHit(fragment: MemoryFragment): MemoryFragment {
-  return {
+  const result = {
     ...fragment,
     confidence: Math.max(0, fragment.confidence - 0.02),
     negativeHits: (fragment.negativeHits || 0) + 1,
     lastAccessed: new Date().toISOString()
   };
+  logger.flow("confidence", "penalize", { id: fragment.id, from: fragment.confidence, to: result.confidence });
+  return result;
 }
 
 export function trackAssociations(fragments: MemoryFragment[], accessedId: string, sessionIds: string[]): void {
@@ -175,7 +192,12 @@ export function addRelation(fragments: MemoryFragment[], sourceId: string, targe
 
   source.relations = source.relations || [];
   const exists = source.relations.find(r => r.id === targetId && r.type === type);
-  if (exists) return false;
+  if (exists) {
+    logger.flow("relation", "duplicate", { sourceId, targetId, type });
+    return false;
+  }
+
+  logger.flow("relation", "add", { sourceId, targetId, type });
 
   source.relations.push({
     id: targetId,
@@ -199,6 +221,7 @@ export function addRelation(fragments: MemoryFragment[], sourceId: string, targe
 }
 
 export function loadMemory(): MemoryFragment[] {
+  logger.data("memory.jsonl", "load_start");
   try {
     if (!fs.existsSync(MEMORY_FILE)) {
       return [];
@@ -207,13 +230,15 @@ export function loadMemory(): MemoryFragment[] {
     if (!content.trim()) {
       return [];
     }
-    return content
+    const fragments = content
       .trim()
       .split("\n")
       .map(line => JSON.parse(line));
+    logger.data("memory.jsonl", "loaded", { count: fragments.length });
+    return fragments;
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error("Error loading memory:", msg);
+    logger.error("Failed to load memory", msg);
     return [];
   }
 }
@@ -226,9 +251,11 @@ export function saveMemory(fragments: MemoryFragment[], options: { force?: boole
     }
 
     if ((!fragments || fragments.length === 0) && !options.force) {
-      console.warn("WARNING: Attempted to save empty memory array - ABORTED to prevent data loss");
+      logger.warn("Aborted save of empty memory array");
       return;
     }
+
+    logger.data("memory.jsonl", "save_start", { count: fragments?.length ?? 0, force: options.force });
 
     const jsonl = fragments && fragments.length > 0 ? fragments.map(f => JSON.stringify(f)).join("\n") : "";
 
@@ -242,6 +269,7 @@ export function saveMemory(fragments: MemoryFragment[], options: { force?: boole
         if (newEntries.length > 0) {
           const merged = [...backupEntries, ...newEntries];
           fs.writeFileSync(backupFile, merged.map(f => JSON.stringify(f)).join("\n"), "utf-8");
+          logger.data("memory.jsonl.bak", "backup_merge", { newEntries: newEntries.length });
         }
       } catch {
         fs.writeFileSync(backupFile, jsonl, "utf-8");
@@ -251,9 +279,10 @@ export function saveMemory(fragments: MemoryFragment[], options: { force?: boole
     }
 
     fs.writeFileSync(MEMORY_FILE, jsonl, "utf-8");
+    logger.data("memory.jsonl", "saved", { count: fragments?.length ?? 0 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error("Error saving memory:", msg);
+    logger.error("Failed to save memory", msg);
     throw error;
   }
 }
@@ -282,22 +311,27 @@ function releaseLock(): void {
 }
 
 export async function saveMemorySafe(fragments: MemoryFragment[], options: { force?: boolean } = {}): Promise<void> {
+  logger.data("memory.jsonl", "acquiring_lock");
   await acquireLock();
   try {
     saveMemory(fragments, options);
   } finally {
     releaseLock();
+    logger.data("memory.jsonl", "released_lock");
   }
 }
 
 export function applySessionDecay(): MemoryFragment[] {
+  logger.flow("decay", "session_start");
   const memory = loadMemory();
   const decayed = decayConfidence(memory);
   saveMemory(decayed);
+  logger.flow("decay", "session_complete", { count: memory.length });
   return decayed;
 }
 
 export function migrateConfidenceFloor(): number {
+  logger.flow("migration", "confidence_floor");
   const memory = loadMemory();
   let migrated = 0;
   const updated = memory.map(frag => {
@@ -310,6 +344,7 @@ export function migrateConfidenceFloor(): number {
   if (migrated > 0) {
     saveMemory(updated);
   }
+  logger.flow("migration", "migrated", { count: migrated });
   return migrated;
 }
 
@@ -359,6 +394,7 @@ function injectionScore(fragment: MemoryFragment): number {
 }
 
 export function searchAndSortFragments(fragments: MemoryFragment[], query: string | null = null, topK = 30): MemoryFragment[] {
+  logger.flow("search", "start", { query: query?.slice(0, 50), topK, totalFragments: fragments.length });
   const nowDate = new Date().toISOString();
 
   if (!query) {
@@ -387,12 +423,14 @@ export function searchAndSortFragments(fragments: MemoryFragment[], query: strin
   const fuseResults = fuse.search(query, { limit: topK });
 
   if (fuseResults.length > 0) {
+    logger.flow("search", "fuse_results", { count: fuseResults.length });
     const topResults = fuseResults.map(r => r.item);
     topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
     topResults.forEach(frag => { frag.lastAccessed = nowDate; });
     return topResults;
   }
 
+  logger.flow("search", "fallback");
   const fallback = [...fragments]
     .sort((a, b) => injectionScore(b) - injectionScore(a))
     .slice(0, topK);

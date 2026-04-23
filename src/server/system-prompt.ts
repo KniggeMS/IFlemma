@@ -1,6 +1,7 @@
 import type { MemoryFragment, PromptContext } from "../types.js";
 import * as core from "../memory/index.js";
 import { applyPromptModifiers } from "./hooks.js";
+import { logger } from "../logger.js";
 
 const BASE_SYSTEM_PROMPT = `<system_prompt>
 <identity>
@@ -107,19 +108,23 @@ function processFragments(fragments: MemoryFragment[], limit: number): MemoryFra
 
   const decayed = core.decayConfidence(fragments) as MemoryFragment[];
 
-  return [...decayed]
+  const result = [...decayed]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, limit);
+
+  logger.flow("system_prompt", "process_fragments", { input: fragments.length, output: result.length });
+  return result;
 }
 
 export async function getDynamicSystemPrompt(projectName: string | null): Promise<string> {
+  logger.flow("system_prompt", "build_start", { project: projectName });
   let prompt = BASE_SYSTEM_PROMPT;
   let memory: any[] = [];
 
   try {
     memory = core.loadMemory();
   } catch (error) {
-    console.error(`[Lemma] Critical: Failed to load memory for system prompt: ${(error as Error).message}`);
+    logger.error("Failed to load memory for system prompt", (error as Error).message);
     return prompt;
   }
 
@@ -134,9 +139,20 @@ export async function getDynamicSystemPrompt(projectName: string | null): Promis
     : (core.filterByProject(memory, null) as MemoryFragment[]);
 
   const globalFragmentsRaw = allFragments.filter(f => f.project === null || f.project === undefined);
+  const projectFragmentsRaw = projectName
+    ? allFragments.filter(f => f.project !== null && f.project !== undefined)
+    : [];
+
+  logger.flow("system_prompt", "memory_loaded", {
+    totalFragments: allFragments.length,
+    globalCount: globalFragmentsRaw.length,
+    projectCount: projectFragmentsRaw.length,
+  });
+
   if (globalFragmentsRaw.length > 0) {
     const sortedGlobal = processFragments(globalFragmentsRaw, 10);
     context.globalFragments = sortedGlobal;
+    logger.flow("system_prompt", "global_context", { count: sortedGlobal.length });
 
     const globalContext = formatGlobalContext(sortedGlobal);
     prompt = prompt.replace(
@@ -146,10 +162,10 @@ export async function getDynamicSystemPrompt(projectName: string | null): Promis
   }
 
   if (projectName) {
-    const projectFragmentsRaw = allFragments.filter(f => f.project !== null && f.project !== undefined);
     if (projectFragmentsRaw.length > 0) {
       const sortedProject = processFragments(projectFragmentsRaw, 20);
       context.fragments = sortedProject;
+      logger.flow("system_prompt", "project_context", { project: projectName, count: sortedProject.length });
 
       const projectContext = formatProjectContext(sortedProject, projectName);
       prompt = prompt.replace(
@@ -159,12 +175,14 @@ export async function getDynamicSystemPrompt(projectName: string | null): Promis
     }
   }
 
+  logger.flow("system_prompt", "applying_modifiers");
   try {
     prompt = await applyPromptModifiers(prompt, context as unknown as Record<string, unknown>);
   } catch (error) {
-    console.error(`[Lemma] Prompt modifiers failed: ${(error as Error).message}`);
+    logger.error("Prompt modifiers failed in system prompt", (error as Error).message);
   }
 
+  logger.flow("system_prompt", "build_complete", { length: prompt.length });
   return prompt;
 }
 

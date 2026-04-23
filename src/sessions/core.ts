@@ -2,6 +2,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { logger } from "../logger.js";
 import type { Session } from "../types.js";
 
 let SESSIONS_DIR = path.join(os.homedir(), ".lemma");
@@ -21,25 +22,31 @@ export function generateTraceId(): string {
 }
 
 export function loadSessions(): Session[] {
+  logger.data("sessions.jsonl", "load_start");
   try {
     if (!fs.existsSync(SESSIONS_FILE)) {
+      logger.data("sessions.jsonl", "loaded", { count: 0, reason: "file_not_found" });
       return [];
     }
     const content = fs.readFileSync(SESSIONS_FILE, "utf-8");
     if (!content.trim()) {
+      logger.data("sessions.jsonl", "loaded", { count: 0, reason: "empty_file" });
       return [];
     }
-    return content
+    const sessions = content
       .trim()
       .split("\n")
       .map(line => JSON.parse(line));
+    logger.data("sessions.jsonl", "loaded", { count: sessions.length });
+    return sessions;
   } catch (error: any) {
-    console.error("Error loading sessions:", error.message);
+    logger.error("Error loading sessions:", { error: error.message });
     return [];
   }
 }
 
 export function saveSessions(sessions: Session[], options: { force?: boolean } = {}): void {
+  logger.data("sessions.jsonl", "save_start", { count: sessions?.length ?? 0 });
   try {
     const dir = path.dirname(SESSIONS_FILE);
     if (!fs.existsSync(dir)) {
@@ -47,7 +54,7 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
     }
 
     if ((!sessions || sessions.length === 0) && !options.force) {
-      console.warn("WARNING: Attempted to save empty sessions array - ABORTED to prevent data loss");
+      logger.warn("Attempted to save empty sessions array - ABORTED to prevent data loss");
       return;
     }
 
@@ -72,15 +79,17 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
     }
 
     fs.writeFileSync(SESSIONS_FILE, jsonl, "utf-8");
+    logger.data("sessions.jsonl", "saved", { count: sessions?.length ?? 0 });
   } catch (error: any) {
-    console.error("Error saving sessions:", error.message);
+    logger.error("Error saving sessions:", { error: error.message });
     throw error;
   }
 }
 
 export function createSession(taskType: string, technologies: string[] = []): Session {
+  logger.flow("session_create", "start", { taskType, technologies });
   const now = new Date();
-  return {
+  const session: Session = {
     id: generateTraceId(),
     session_id: generateSessionId(),
     timestamp: now.toISOString(),
@@ -98,22 +107,30 @@ export function createSession(taskType: string, technologies: string[] = []): Se
     lessons: [],
     status: "active"
   };
+  logger.flow("session_create", "created", { sessionId: session.session_id });
+  return session;
 }
 
 export function findSession(sessions: Session[], sessionId: string): Session | null {
-  return sessions.find(s => s.session_id === sessionId) || null;
+  const result = sessions.find(s => s.session_id === sessionId) || null;
+  logger.flow("session_find", "by_id", { sessionId, found: !!result });
+  return result;
 }
 
 export function findActiveSession(sessions: Session[]): Session | null {
-  return sessions.find(s => s.status === "active") || null;
+  const result = sessions.find(s => s.status === "active") || null;
+  logger.flow("session_find", "active", { found: !!result });
+  return result;
 }
 
 export function endSession(session: Session, outcome: string, finalApproach: string | null = null, lessons: string[] = []): Session {
+  logger.flow("session_end", "start", { sessionId: session.session_id, outcome });
   session.status = "completed";
   session.task_outcome = outcome;
   session.final_approach = finalApproach;
   session.lessons = lessons;
   session.completed_at = new Date().toISOString();
+  logger.flow("session_end", "complete", { sessionId: session.session_id, outcome });
   return session;
 }
 

@@ -4,6 +4,7 @@ import fs from "fs";
 import crypto from "crypto";
 import Fuse from "fuse.js";
 import { TASK_GUIDE_MAP } from "./task-map.js";
+import { logger } from "../logger.js";
 import type { Guide, GuideSuggestion, SuggestResult } from "../types.js";
 
 interface GuideUpdates {
@@ -39,7 +40,8 @@ export function createGuide(
   contexts: string[] = [],
   learnings: string[] = []
 ): Guide {
-  return {
+  logger.flow("guide_create", "start", { guide, category });
+  const result: Guide = {
     id: generateGuideId(),
     guide: guide.toLowerCase().trim(),
     category: category.toLowerCase().trim(),
@@ -58,28 +60,36 @@ export function createGuide(
     superseded_by: null,
     deprecated: false
   };
+  logger.flow("guide_create", "created", { id: result.id });
+  return result;
 }
 
 export function loadGuides(): Guide[] {
+  logger.data("guides.jsonl", "load_start");
   try {
     if (!fs.existsSync(GUIDES_FILE)) {
+      logger.data("guides.jsonl", "loaded", { count: 0 });
       return [];
     }
     const content = fs.readFileSync(GUIDES_FILE, "utf-8");
     if (!content.trim()) {
+      logger.data("guides.jsonl", "loaded", { count: 0 });
       return [];
     }
-    return content
+    const guides = content
       .trim()
       .split("\n")
       .map((line: string) => JSON.parse(line));
+    logger.data("guides.jsonl", "loaded", { count: guides.length });
+    return guides;
   } catch (error: unknown) {
-    console.error("Error loading guides:", (error as Error).message);
+    logger.error("Error loading guides:", { error: (error as Error).message });
     return [];
   }
 }
 
 export function saveGuides(guides: Guide[], options: { force?: boolean } = {}): void {
+  logger.data("guides.jsonl", "save_start", { count: guides?.length ?? 0 });
   try {
     const dir = path.dirname(GUIDES_FILE);
     if (!fs.existsSync(dir)) {
@@ -87,7 +97,7 @@ export function saveGuides(guides: Guide[], options: { force?: boolean } = {}): 
     }
 
     if ((!guides || guides.length === 0) && !options.force) {
-      console.warn("WARNING: Attempted to save empty guides array - ABORTED to prevent data loss");
+      logger.warn("Attempted to save empty guides array - ABORTED to prevent data loss");
       return;
     }
 
@@ -102,7 +112,10 @@ export function saveGuides(guides: Guide[], options: { force?: boolean } = {}): 
         const newEntries = guides.filter(g => !backupIds.has(g.id));
         if (newEntries.length > 0) {
           const merged = [...backupEntries, ...newEntries];
+          logger.data("guides.jsonl", "backup_merge", { existing: backupEntries.length, newEntries: newEntries.length, merged: merged.length });
           fs.writeFileSync(backupFile, merged.map((g: { id: string }) => JSON.stringify(g)).join("\n"), "utf-8");
+        } else {
+          logger.data("guides.jsonl", "backup_unchanged", { existing: backupEntries.length });
         }
       } catch {
         fs.writeFileSync(backupFile, jsonl, "utf-8");
@@ -112,8 +125,9 @@ export function saveGuides(guides: Guide[], options: { force?: boolean } = {}): 
     }
 
     fs.writeFileSync(GUIDES_FILE, jsonl, "utf-8");
+    logger.data("guides.jsonl", "saved", { count: guides?.length ?? 0 });
   } catch (error: unknown) {
-    console.error("Error saving guides:", (error as Error).message);
+    logger.error("Error saving guides:", { error: (error as Error).message });
     throw error;
   }
 }
@@ -125,11 +139,13 @@ export function promoteToGuide(
   knowledge: string,
   context: string = ""
 ): Guide {
+  logger.flow("guide_distill", "start", { guideName, memoryId: context });
   let guide = findGuide(guides, guideName);
 
   if (!guide) {
     guide = createGuide(guideName, category, `Created via distillation from memory.`, [context], [knowledge]);
     guides.push(guide);
+    logger.flow("guide_distill", "created", { guide: guideName });
   } else {
     if (!guide.learnings.includes(knowledge)) {
       guide.learnings.push(knowledge);
@@ -139,6 +155,7 @@ export function promoteToGuide(
     }
     guide.usage_count += 1;
     guide.last_used = getToday();
+    logger.flow("guide_distill", "updated", { guide: guideName });
   }
 
   return guide;
@@ -150,12 +167,19 @@ export function findGuide(guides: Guide[], guideName: string): Guide | null {
 }
 
 export function findSimilarGuide(guides: Guide[], guideName: string): Guide | null {
+  logger.flow("guide_find", "searching", { guideName });
   const normalized = guideName.toLowerCase().trim();
 
   const exact = guides.find(g => g.guide === normalized);
-  if (exact) return exact;
+  if (exact) {
+    logger.flow("guide_find", "found", { guideName, method: "exact" });
+    return exact;
+  }
 
-  if (guides.length === 0) return null;
+  if (guides.length === 0) {
+    logger.flow("guide_find", "not_found", { guideName, reason: "empty_guides" });
+    return null;
+  }
 
   const fuse = new Fuse<Guide>(guides, {
     keys: ['guide'],
@@ -167,44 +191,61 @@ export function findSimilarGuide(guides: Guide[], guideName: string): Guide | nu
   const results = fuse.search(normalized, { limit: 1 });
   const topResult = results[0];
   if (topResult && (topResult.score ?? 1) < 0.25) {
+    logger.flow("guide_find", "found", { guideName, method: "fuzzy", score: topResult.score });
     return topResult.item;
   }
 
+  logger.flow("guide_find", "not_found", { guideName });
   return null;
 }
 
 export function updateGuide(guides: Guide[], guideName: string, updates: GuideUpdates): Guide | null {
+  logger.flow("guide_update", "start", { guideName });
   const guide = findGuide(guides, guideName);
-  if (!guide) return null;
+  if (!guide) {
+    logger.flow("guide_update", "not_found", { guideName });
+    return null;
+  }
 
-  if (updates.guide) guide.guide = updates.guide.toLowerCase().trim();
-  if (updates.category) guide.category = updates.category.toLowerCase().trim();
-  if (updates.description) guide.description = updates.description.trim();
+  const fieldsUpdated: string[] = [];
+  if (updates.guide) { guide.guide = updates.guide.toLowerCase().trim(); fieldsUpdated.push("guide"); }
+  if (updates.category) { guide.category = updates.category.toLowerCase().trim(); fieldsUpdated.push("category"); }
+  if (updates.description) { guide.description = updates.description.trim(); fieldsUpdated.push("description"); }
   if (updates.add_anti_patterns) {
     guide.anti_patterns = [...(guide.anti_patterns || []), ...updates.add_anti_patterns];
+    fieldsUpdated.push("anti_patterns");
   }
   if (updates.add_pitfalls) {
     guide.known_pitfalls = [...(guide.known_pitfalls || []), ...updates.add_pitfalls];
+    fieldsUpdated.push("pitfalls");
   }
   if (updates.superseded_by) {
     guide.superseded_by = updates.superseded_by;
+    fieldsUpdated.push("superseded_by");
   }
   if (updates.deprecated === true) {
     guide.deprecated = true;
+    fieldsUpdated.push("deprecated");
   }
 
+  logger.flow("guide_update", "complete", { guideName, fields: fieldsUpdated });
   return guide;
 }
 
 export function deleteGuide(guides: Guide[], guideName: string): boolean {
+  logger.flow("guide_delete", "start", { guideName });
   const normalized = guideName.toLowerCase().trim();
   const initialLength = guides.length;
   const filtered = guides.filter(g => g.guide !== normalized);
 
-  if (filtered.length === initialLength) return false;
+  if (filtered.length === initialLength) {
+    logger.flow("guide_delete", "not_found", { guideName });
+    return false;
+  }
 
   guides.length = 0;
   guides.push(...filtered);
+  logger.flow("guide_delete", "deleted", { guideName });
   return true;
 }
 
@@ -217,16 +258,20 @@ export function practiceGuide(
   newLearnings: string[] = [],
   outcome: string | null = null
 ): Guide {
+  logger.flow("guide_practice", "start", { guide: guideName, category });
   let guide = findSimilarGuide(guides, guideName);
 
   if (!guide) {
     guide = createGuide(guideName, category, description, newContexts, newLearnings);
     guides.push(guide);
+    logger.flow("guide_practice", "created_new", { guide: guideName });
+    logger.flow("guide_practice", "complete", { guide: guideName, usageCount: guide.usage_count, learningsCount: guide.learnings.length });
     return guide;
   }
 
   guide.usage_count += 1;
   guide.last_used = getToday();
+  logger.flow("guide_practice", "updated", { guide: guideName, usageCount: guide.usage_count });
 
   if (!guide.description && description) {
     guide.description = description.trim();
@@ -256,6 +301,7 @@ export function practiceGuide(
     guide.failure_count = (guide.failure_count || 0) + 1;
   }
 
+  logger.flow("guide_practice", "complete", { guide: guideName, usageCount: guide.usage_count, learningsCount: guide.learnings.length });
   return guide;
 }
 
@@ -313,6 +359,7 @@ function hasTokenMatch(text: string, target: string): boolean {
 }
 
 export function suggestGuides(taskDescription: string, existingGuides: Guide[] = []): SuggestResult {
+  logger.flow("guide_suggest", "start", { task: taskDescription?.slice(0, 50) });
   const suggestions: GuideSuggestion[] = [];
   const seen = new Set<string>();
 
@@ -337,6 +384,7 @@ export function suggestGuides(taskDescription: string, existingGuides: Guide[] =
   });
 
   const staticResults = staticFuse.search(taskDescription, { limit: 20 });
+  logger.flow("guide_suggest", "static_results", { count: staticResults.length });
 
   for (const result of staticResults) {
     const guideDef = result.item;
@@ -361,6 +409,7 @@ export function suggestGuides(taskDescription: string, existingGuides: Guide[] =
     });
 
     const trackedResults = trackedFuse.search(taskDescription, { limit: 20 });
+    logger.flow("guide_suggest", "tracked_results", { count: trackedResults.length });
 
     for (const result of trackedResults) {
       const existing = result.item;
@@ -405,6 +454,8 @@ export function suggestGuides(taskDescription: string, existingGuides: Guide[] =
 
   const tracked = suggestions.filter(s => s.tracked);
   const missing = suggestions.filter(s => !s.tracked);
+
+  logger.flow("guide_suggest", "complete", { total: suggestions.length, tracked: tracked.length, missing: missing.length });
 
   return {
     relevant: tracked,

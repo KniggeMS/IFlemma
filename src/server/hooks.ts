@@ -1,3 +1,5 @@
+import { logger } from "../logger.js";
+
 export const HookTypes = {
   ON_START: "onStart",
   ON_PROJECT_CHANGE: "onProjectChange",
@@ -19,6 +21,7 @@ export function registerHook(hookType: string, callback: HookCallback): () => vo
   }
 
   hooks[hookType].push(callback);
+  logger.flow("hook", "register", { hookType, count: hooks[hookType].length });
 
   return () => {
     const index = hooks[hookType]?.indexOf(callback);
@@ -33,17 +36,23 @@ export async function triggerHook(hookType: string, context: Record<string, unkn
     throw new Error(`Unknown hook type: ${hookType}`);
   }
 
+  logger.flow("hook", "trigger_start", { hookType, callbackCount: hooks[hookType].length });
+
   const results: unknown[] = [];
-  for (const callback of hooks[hookType]) {
+  for (let i = 0; i < hooks[hookType].length; i++) {
+    const callback = hooks[hookType][i];
+    logger.flow("hook", "callback_executing", { index: i });
     try {
       const result = await callback(context);
+      logger.flow("hook", "callback_success");
       results.push(result);
     } catch (error) {
-      console.error(`Hook ${hookType} callback failed:`, (error as Error).message);
+      logger.error("Hook callback failed", { hookType, error: (error as Error).message });
       results.push({ error: (error as Error).message });
     }
   }
 
+  logger.flow("hook", "trigger_complete", { hookType, results: results.length });
   return results;
 }
 
@@ -63,6 +72,7 @@ export function registerPromptModifier(modifier: PromptModifierFn): () => void {
   }
 
   promptModifiers.push(modifier);
+  logger.flow("prompt_modifier", "register", { count: promptModifiers.length });
 
   return () => {
     const index = promptModifiers.indexOf(modifier);
@@ -75,14 +85,19 @@ export function registerPromptModifier(modifier: PromptModifierFn): () => void {
 export async function applyPromptModifiers(prompt: string, context: Record<string, unknown> = {}): Promise<string> {
   let modifiedPrompt = prompt;
 
-  for (const modifier of promptModifiers) {
+  logger.flow("prompt_modifier", "apply_start", { count: promptModifiers.length });
+
+  for (let i = 0; i < promptModifiers.length; i++) {
+    const modifier = promptModifiers[i];
+    logger.flow("prompt_modifier", "applying", { index: i });
     try {
       modifiedPrompt = await modifier(modifiedPrompt, context);
     } catch (error) {
-      console.error("Prompt modifier failed:", (error as Error).message);
+      logger.error("Prompt modifier failed", (error as Error).message);
     }
   }
 
+  logger.flow("prompt_modifier", "apply_complete", { finalLength: modifiedPrompt.length });
   return modifiedPrompt;
 }
 

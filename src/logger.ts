@@ -67,6 +67,18 @@ function write(level: string, message: string, meta?: unknown): void {
   } catch {}
 }
 
+function truncateStrings(obj: Record<string, unknown>, maxLen: number): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "string" && v.length > maxLen) {
+      result[k] = v.substring(0, maxLen) + "...";
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
 export const logger = {
   info(message: string, meta?: unknown): void {
     write("INFO", message, meta);
@@ -97,6 +109,45 @@ export const logger = {
       }
     }
     write("TOOL", `${tool}${duration}`, Object.keys(argSummary).length > 0 ? argSummary : undefined);
+  },
+
+  flow(flowName: string, step: string, meta?: unknown): void {
+    write("INFO", `[FLOW] [${flowName}] ${step}`, meta);
+  },
+
+  request(method: string, params?: Record<string, unknown>): void {
+    let filtered: Record<string, unknown> | undefined;
+    if (params) {
+      const cleaned: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(params)) {
+        if (k !== "_meta") {
+          cleaned[k] = v;
+        }
+      }
+      if (Object.keys(cleaned).length > 0) {
+        filtered = truncateStrings(cleaned, 100);
+      }
+    }
+    write("DEBUG", `[REQ] ${method}`, filtered);
+  },
+
+  response(method: string, isError: boolean, durationMs: number, meta?: unknown): void {
+    const status = isError ? "error" : "ok";
+    const level = isError ? "WARN" : "INFO";
+    write(level, `[RES] ${method} (${durationMs}ms) ${status}`, meta);
+  },
+
+  notify(method: string, status: "sending" | "debounced" | "failed", meta?: unknown): void {
+    const level = status === "failed" ? "ERROR" : "INFO";
+    write(level, `[NOTIFY] ${method} ${status}`, meta);
+  },
+
+  data(fileName: string, operation: string, meta?: unknown): void {
+    write("DEBUG", `[DATA] ${fileName} ${operation}`, meta);
+  },
+
+  inject(target: string, tokens: number, count: number, meta?: unknown): void {
+    write("INFO", `[INJECT] ${target} — ${tokens} tokens, ${count} items`, meta);
   },
 };
 

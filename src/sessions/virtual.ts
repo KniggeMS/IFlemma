@@ -1,6 +1,7 @@
 import os from "os";
 import path from "path";
 import fs from "fs";
+import { logger } from "../logger.js";
 import type { VirtualSession, ToolCallEntry } from "../types.js";
 
 interface FinalizedVirtualSession {
@@ -44,6 +45,8 @@ export function setVirtualSessionConfig(cfg: { timeout_minutes: number } | null)
 }
 
 export function recordToolCall(toolName: string, args: any, result: any): VirtualSession {
+  logger.flow("virtual_session", "record_tool", { tool: toolName });
+
   const entry: ToolCallEntry = {
     tool: toolName,
     timestamp: new Date().toISOString(),
@@ -62,9 +65,11 @@ export function recordToolCall(toolName: string, args: any, result: any): Virtua
       memories_accessed: [],
       memories_created: [],
     };
+    logger.flow("virtual_session", "created", { id: currentVirtualSession.id });
   }
 
   currentVirtualSession.tool_calls.push(entry);
+  logger.flow("virtual_session", "recorded", { tool: toolName, entryCount: currentVirtualSession.tool_calls.length });
 
   extractSessionData(toolName, args, result, currentVirtualSession);
 
@@ -74,6 +79,7 @@ export function recordToolCall(toolName: string, args: any, result: any): Virtua
 }
 
 function resetTimeout(): void {
+  logger.flow("virtual_session", "timeout_reset", { minutes: config.timeout_minutes });
   if (sessionTimeout) clearTimeout(sessionTimeout);
   sessionTimeout = setTimeout(() => {
     finalizeVirtualSession();
@@ -124,7 +130,9 @@ function extractSessionData(tool: string, args: any, result: any, session: Virtu
 }
 
 export function finalizeVirtualSession(): FinalizedVirtualSession | null {
+  logger.flow("virtual_session", "finalize_start");
   if (!currentVirtualSession || currentVirtualSession.tool_calls.length === 0) {
+    logger.flow("virtual_session", "finalize_skipped", { reason: "empty" });
     currentVirtualSession = null;
     return null;
   }
@@ -143,7 +151,10 @@ export function finalizeVirtualSession(): FinalizedVirtualSession | null {
   const filePath = path.join(getLogDir(), `${session.id}.json`);
   try {
     fs.writeFileSync(filePath, JSON.stringify(session, null, 2), "utf-8");
-  } catch {}
+    logger.flow("virtual_session", "finalize_complete", { id: session.id, toolCalls: session.duration_tool_calls });
+  } catch (error: any) {
+    logger.error("Failed to write virtual session file:", { error: error.message, id: session.id });
+  }
 
   currentVirtualSession = null;
   if (sessionTimeout) {

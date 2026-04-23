@@ -2,6 +2,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import type { LemmaConfig } from "../types.js";
+import { logger } from "../logger.js";
 
 const CONFIG_PATH = path.join(os.homedir(), ".lemma", "config.json");
 
@@ -36,17 +37,22 @@ function getConfigPath(): string {
 export function loadConfig(): LemmaConfig {
   if (_config) return _config;
 
+  logger.data("config.json", "load_start");
+
   const configPath = getConfigPath();
   try {
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, "utf-8");
       const userConfig = JSON.parse(raw);
       _config = deepMerge(DEFAULT_CONFIG, userConfig);
+      logger.data("config.json", "loaded", { hasCustom: true });
     } else {
       _config = { ...DEFAULT_CONFIG };
+      logger.data("config.json", "using_defaults");
     }
   } catch {
     _config = { ...DEFAULT_CONFIG };
+    logger.data("config.json", "using_defaults");
   }
 
   return _config;
