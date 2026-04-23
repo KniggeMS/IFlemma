@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.6] - 2026-04-23
+
+### Added
+- **Seed system** — Built-in knowledge fragments auto-populated on every startup for all users (new and existing).
+  - `seed_task_complexity` — Simple vs complex task assessment with mandatory 3-phase process (Plan → Evaluate → Execute)
+  - `seed_prompt_engineering` — System prompt structure (4-section template), anti-hallucination rules, parallel agent coordination, XML tag usage
+  - `seed_clean_code_modern` — Agentic era clean code practices: SRP as context isolation, pragmatic DRY, type safety, AI-assisted development caveats
+  - Seeds tagged with `lemma_seed`, never decay, auto-detect existing entries (idempotent)
+  - New module: `src/memory/seed.ts` with `seedMemory()`, `getSeedCount()`, `getSeedIds()`
+
+### Tests
+- **415 tests** passing, 0 failures
+
+---
+
 ## [0.8.5] - 2026-04-23
 
 ### Changed

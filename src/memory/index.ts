@@ -27,3 +27,5 @@ export {
 } from "./core.js";
 
 export { scanForSecrets, redactSecrets } from "./privacy.js";
+
+export { seedMemory, getSeedCount, getSeedIds } from "./seed.js";

@@ -461,6 +461,12 @@ async function initializeContext(): Promise<void> {
   virtualSession.setVirtualSessionConfig(cfg.virtual_session);
   logger.flow("initialize_context", "virtual_session_config_set");
 
+  const seedResult = core.seedMemory(core.loadMemory());
+  if (seedResult.seeded > 0) {
+    core.saveMemory(core.loadMemory());
+    logger.flow("initialize_context", "seeded", seedResult);
+  }
+
   const migrated = core.migrateConfidenceFloor();
   if (migrated > 0) {
     logger.info(`Migration: boosted ${migrated} fragments to 0.3 floor`);
