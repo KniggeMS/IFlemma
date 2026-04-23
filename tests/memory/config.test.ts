@@ -24,7 +24,7 @@ afterEach(() => {
 describe("loadConfig — defaults", () => {
   test("returns defaults when no config file exists", () => {
     const config: LemmaConfig = loadConfig();
-    assert.equal(config.token_budget.full_content, 3000);
+    assert.equal(config.token_budget.full_content, 5000);
     assert.equal(config.token_budget.summary_index, 1000);
     assert.equal(config.injection.max_full_content_fragments, 15);
     assert.equal(config.virtual_session.timeout_minutes, 30);
@@ -71,7 +71,7 @@ describe("loadConfig — deep merge with user config", () => {
     const config: LemmaConfig & { custom_section: { enabled: boolean; value: number } } = loadConfig() as any;
     assert.equal(config.custom_section.enabled, true);
     assert.equal(config.custom_section.value, 42);
-    assert.equal(config.token_budget.full_content, 3000);
+    assert.equal(config.token_budget.full_content, 5000);
   });
 
   test("falls back to defaults when config file has invalid JSON", () => {
@@ -83,7 +83,7 @@ describe("loadConfig — deep merge with user config", () => {
 
     resetConfig();
     const config: LemmaConfig = loadConfig();
-    assert.equal(config.token_budget.full_content, 3000);
+    assert.equal(config.token_budget.full_content, 5000);
   });
 });
 
@@ -117,7 +117,7 @@ describe("estimateTokens", () => {
 describe("resetConfig", () => {
   test("clears cached config so next load re-reads file", () => {
     const first: LemmaConfig = loadConfig();
-    assert.equal(first.token_budget.full_content, 3000);
+    assert.equal(first.token_budget.full_content, 5000);
 
     const userConfig = { token_budget: { full_content: 9999 } };
     fs.writeFileSync(

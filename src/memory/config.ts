@@ -8,7 +8,7 @@ const CONFIG_PATH = path.join(os.homedir(), ".lemma", "config.json");
 
 const DEFAULT_CONFIG: LemmaConfig = {
   token_budget: {
-    full_content: 3000,
+    full_content: 5000,
     summary_index: 1000,
     guides_detail: 1000,
   },
