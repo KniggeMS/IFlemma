@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.5] - 2026-04-23
+
+### Changed
+- **Token budget increased** — Default `full_content` injection budget raised from 3000 to 5000 tokens, allowing more memories to be injected as full content into tool descriptions.
+
+### Tests
+- **415 tests** passing, 0 failures
+
+---
+
 ## [0.8.4] - 2026-04-23
 
 ### Added
