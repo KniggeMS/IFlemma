@@ -92,8 +92,8 @@ describe("Virtual Sessions", () => {
       const session: VirtualSession = recordToolCall("memory_add", {
         fragment: "content",
         title: "New Memory",
-      }, null);
-      assert.ok(session.memories_created.includes("New Memory"));
+      }, { content: [{ text: "Added [mabc123def] New Memory" }] });
+      assert.ok(session.memories_created.includes("mabc123def"));
     });
   });
 

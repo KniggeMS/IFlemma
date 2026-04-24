@@ -146,6 +146,11 @@ let activeSessionId: string | null = null;
 
 let _notifyChange: (() => void) | null = null;
 
+export function resetSessionState(): void {
+  activeSessionId = null;
+  virtualSession.finalizeVirtualSession();
+}
+
 function getSessionContext(): { memoriesAccessed: string[]; memoriesCreated: string[]; guidesUsed: string[] } {
   const vs = virtualSession.getCurrentVirtualSession();
   return {

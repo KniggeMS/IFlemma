@@ -6,9 +6,18 @@ const LOG_DIR = path.join(os.homedir(), ".lemma", "logs");
 const MAX_LOG_FILES = 7;
 
 let _logDir: string | null = null;
+let _disabled = false;
 
 export function setLogDir(dir: string): void {
   _logDir = dir;
+}
+
+export function disableLogger(): void {
+  _disabled = true;
+}
+
+export function enableLogger(): void {
+  _disabled = false;
 }
 
 function getLogDir(): string {
@@ -56,6 +65,7 @@ function formatMessage(level: string, message: string, meta?: unknown): string {
 }
 
 function write(level: string, message: string, meta?: unknown): void {
+  if (_disabled) return;
   try {
     ensureLogDir();
     const line = formatMessage(level, message, meta);

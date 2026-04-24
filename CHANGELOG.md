@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.8] - 2026-04-24
+
+### Fixed — Test Suite Performance & CI Timeout
+
+Tests were timing out at 30 minutes on CI. Root cause: leaked `setTimeout(30 min)` in `virtual.ts` never cleared between tests, keeping the Node.js process alive.
+
+- **Logger disabled in tests** — `disableLogger()` API + `tests/_setup.ts` global setup. Eliminates ~200+ sync disk writes per test to `~/.lemma/logs`.
+- **30-min setTimeout leak fixed** — `resetSessionState()` added to `handlers.ts`, clears `activeSessionId` + finalizes virtual session (clears pending timer).
+- **Session test cleanup** — All 4 session test files now call `resetSessionState()` in `afterEach` to prevent timer leaks.
+- **`session-preload.test.ts` isolation** — Was missing `sessions.setSessionsDir()` and `guides.setGuidesDir()`, causing writes to real `~/.lemma/` directory.
+- **`virtual.test.ts` assertion fix** — Test passed `null` result to `recordToolCall` but expected memory ID extraction via regex. Fixed with proper result fixture matching the `[m0-9a-f]+` ID format.
+- **Test runner** — Switched from `tsx --test` to `node --import tsx --import ./tests/_setup.ts --test` for global logger suppression.
+- **`tsconfig.tsbuildinfo` added to `.gitignore`**
+
+**Result:** 481 tests: 30+ min → ~5 sec.
+
 ## [0.8.7] - 2026-04-24
 
 ### Added — Fragment Schema & Response Hooks

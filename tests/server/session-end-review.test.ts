@@ -6,7 +6,7 @@ import os from "os";
 import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as sessions from "../../src/sessions/index.js";
-import { setNotifyChange, handleSessionStart, handleSessionEnd, handleMemoryAdd, handleMemoryRead, handleGuidePractice } from "../../src/server/handlers.js";
+import { setNotifyChange, handleSessionStart, handleSessionEnd, handleMemoryAdd, handleMemoryRead, handleGuidePractice, resetSessionState } from "../../src/server/handlers.js";
 import { recordToolCall } from "../../src/sessions/virtual.js";
 import type { MemoryFragment } from "../../src/types.js";
 
@@ -21,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetSessionState();
   core.setMemoryDir(path.join(os.homedir(), ".lemma"));
   guides.setGuidesDir(path.join(os.homedir(), ".lemma"));
   sessions.setSessionsDir(path.join(os.homedir(), ".lemma"));

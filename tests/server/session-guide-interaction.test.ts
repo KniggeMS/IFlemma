@@ -8,6 +8,7 @@ import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as sessions from "../../src/sessions/index.js";
 import * as handlers from "../../src/server/handlers.js";
+import { resetSessionState } from "../../src/server/handlers.js";
 import type { Guide, Session, MemoryFragment } from "../../src/types.js";
 
 let TMPDIR: string;
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetSessionState();
   core.setMemoryDir(path.join(os.homedir(), ".lemma"));
   guides.setGuidesDir(path.join(os.homedir(), ".lemma"));
   sessions.setSessionsDir(path.join(os.homedir(), ".lemma"));

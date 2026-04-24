@@ -18,3 +18,4 @@ test-results/
 _js_backup
 .npmrc
 ROADMAP.md
+tsconfig.tsbuildinfo

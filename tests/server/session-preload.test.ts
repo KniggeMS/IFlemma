@@ -4,18 +4,26 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import * as core from "../../src/memory/core.js";
-import { handleSessionStart, handleMemoryAdd, setNotifyChange } from "../../src/server/handlers.js";
+import * as guides from "../../src/guides/index.js";
+import * as sessions from "../../src/sessions/index.js";
+import { handleSessionStart, handleMemoryAdd, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
 
-const TEST_DIR = path.join(os.tmpdir(), `lemma-test-session-preload-${Date.now()}`);
+let TMPDIR: string;
 
 beforeEach(() => {
-  core.setMemoryDir(TEST_DIR);
-  fs.mkdirSync(TEST_DIR, { recursive: true });
+  TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), "lemma-preload-"));
+  core.setMemoryDir(TMPDIR);
+  guides.setGuidesDir(TMPDIR);
+  sessions.setSessionsDir(TMPDIR);
   setNotifyChange(() => {});
 });
 
 afterEach(() => {
-  fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  resetSessionState();
+  core.setMemoryDir(path.join(os.homedir(), ".lemma"));
+  guides.setGuidesDir(path.join(os.homedir(), ".lemma"));
+  sessions.setSessionsDir(path.join(os.homedir(), ".lemma"));
+  fs.rmSync(TMPDIR, { recursive: true, force: true });
 });
 
 describe("Session start pre-loaded memories", () => {
