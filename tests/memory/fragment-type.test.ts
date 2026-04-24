@@ -120,7 +120,7 @@ describe("FragmentType", () => {
     assert.equal(loaded.length, 1);
     assert.equal(loaded[0].id, "m_legacy0001");
     assert.equal(loaded[0].fragment, "old content");
-    assert.equal((loaded[0] as Record<string, unknown>).type, undefined);
+    assert.equal((loaded[0] as unknown as Record<string, unknown>).type, undefined);
   });
 
   test("backward compat: fragment loaded without related_guides field gets undefined", () => {
@@ -157,6 +157,6 @@ describe("FragmentType", () => {
 
     const loaded = core.loadMemory();
     assert.equal(loaded.length, 1);
-    assert.equal((loaded[0] as Record<string, unknown>).related_guides, undefined);
+    assert.equal((loaded[0] as unknown as Record<string, unknown>).related_guides, undefined);
   });
 });
