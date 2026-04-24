@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.8.7] - 2026-04-24
+
+### Added — Fragment Schema & Response Hooks
+
+Comprehensive update to fix inconsistent fragment formats across LLMs and complete the bidirectional Memory↔Guide connection. Core principle: **LLM decides, code records. Code never guesses — it only applies deterministic actions.**
+
+- **FragmentType** (`src/types.ts`) — Fragments now have type classification: `fact`, `pattern`, `lesson`, `warning`, `context`. Default: `fact`.
+- **MemoryFragment.related_guides** — Tracks which guides a fragment informs (bidirectional link).
+- **Guide.source_memories** — Records which memory IDs spawned a guide.
+- **Guide.validated_by** — Records which memory IDs validated a guide during practice sessions.
+- **`memory_add` type parameter** — Specify fragment type, e.g. `type: "pattern"`. Invalid values fall back to `fact`.
+- **Fragment format template** — Structured markdown format added to `memory_add` tool description: `## [Title]\n[Context]\n- [Key points]`.
+
+#### Deterministic Connections (4 mechanisms)
+
+- **D-1: guide_distill bidirectional link** — On `guide_distill`, automatically: `guide.source_memories ← memory_id` and `memory.related_guides ← guide_name`.
+- **D-2: guide_practice session validation** — On `guide_practice`, session-read memories auto-link to guide's `validated_by` and memory's `related_guides`.
+- **D-3: trackAssociations activation** — On `memory_read` with multiple search results (>1), `associatedWith` cross-references are auto-created (was previously dead code).
+- **D-4: memory_merge inheritance** — Merged fragments inherit `relations`, `related_guides`, and `associatedWith` from sources. All old ID references updated to new ID across memory and guides.
+
+#### Response Hooks (10 tools)
+
+Contextual `SUGGESTED ACTIONS` reminders added to tool responses. Each hook only appears when meaningful context exists:
+
+| Hook | Tool | Condition | Suggestion |
+|------|------|-----------|------------|
+| H-1 | memory_add | Topic overlap exists | Call memory_relate |
+| H-1 | memory_add | Session has read memories | Call memory_relate |
+| H-1 | memory_add | Type is "pattern" or "lesson" | Call guide_distill |
+| H-2 | memory_read | Multiple fragments returned | Call memory_relate |
+| H-3 | memory_update | Fragment content changed | Call memory_relate to update |
+| H-4 | memory_feedback | Positive feedback | Call guide_distill to promote to skill |
+| H-4 | memory_feedback | Negative feedback | Call memory_update/forget/relate(contradicts) |
+| H-5 | memory_merge | Always | Report inherited connections |
+| H-6 | guide_practice | Session has read memories | Call guide_distill |
+| H-6 | guide_practice | Success rate < 40% | Call guide_update to improve |
+| H-7 | guide_create | Always | Call guide_practice + guide_distill |
+| H-8 | guide_distill | Related memories exist on same topic | Additional guide_distill |
+| H-9 | guide_merge | Always | Report inherited properties |
+| H-10 | session_end | Session has activity | Full review: relate + distill + practice |
+
+### Changed
+
+- **System prompt** fully rewritten (`src/server/system-prompt.ts`):
+  - `<identity>` — Clearer role definition, replaced "Lemma — Persistent Memory for LLMs" with contextual description
+  - `<critical_rules>` — 4→6 rules, added anti-hallucination and memory reliability rules
+  - `<fragment_types>` — New section: FragmentType table with usage examples
+  - `<response_hooks>` — New section: SUGGESTED ACTIONS behavior guide
+  - `<knowledge_to_skill_pipeline>` — Replaced old `<guide_tracking>` with bidirectional Memory↔Guide pipeline description
+  - `<tool_focus_rule>` removed, content merged into `<critical_rules>` rule 6
+- **Virtual session** (`src/sessions/virtual.ts`) — `memory_read` batch ids now records all IDs to `memories_accessed`; `memory_add` extracts fragment ID from response via regex and adds to `memories_created`
+- **Seed fragments** (`src/memory/seed.ts`) — Added `type: "fact"` and `related_guides: []`
+
+### Tests
+
+- **+66 new tests** (11 files), total 481 tests, 0 failures
+- `tests/memory/fragment-type.test.ts` (13) — FragmentType defaults, all types, save/load, boost/decay preservation, backward compatibility
+- `tests/memory/track-associations.test.ts` (8) — Bidirectional links, empty/missing targets, dedup, multi-way associations
+- `tests/server/memory-add-hook.test.ts` (7) — Overlap hook, type hook, session context hook, type validation
+- `tests/server/memory-read-hook.test.ts` (4) — Multi-read hook, single-read (no hook), batch, associatedWith
+- `tests/server/memory-update-hook.test.ts` (3) — Content change hook, title/confidence only (no hook)
+- `tests/server/memory-feedback-hook.test.ts` (2) — Positive→distill, negative→update/forget
+- `tests/server/memory-merge-inheritance.test.ts` (8) — Relation inheritance, guide inheritance, ID update, dedup
+- `tests/server/guide-distill-bidirectional.test.ts` (6) — Bidirectional link, dedup, hook
+- `tests/server/guide-practice-validation.test.ts` (4) — Session validation, low success rate warning
+- `tests/server/guide-create-merge-hooks.test.ts` (5) — Create hook, update (no hook), merge hook
+- `tests/server/session-end-review.test.ts` (6) — Session review, read+create suggestion, relate+distill suggestion
+
+### Fixed
+
+- **handlers-core.test.ts regression** — Updated `"Lemma — Persistent Memory"` assertion after system prompt rewrite
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Modified source files | 8 |
+| New test files | 11 |
+| New tests | 66 |
+| New type fields | 4 (FragmentType, .type, .related_guides, .source_memories, .validated_by) |
+| Deterministic connections | 4 mechanisms |
+| Response hooks | 10 tool responses |
+| Dead code revived | trackAssociations |
+| New external dependencies | 0 |
+
+---
+
 ## [0.8.6] - 2026-04-23
 
 ### Added

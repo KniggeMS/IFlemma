@@ -3,6 +3,7 @@ import * as guides from "../guides/index.js";
 import * as sessions from "../sessions/index.js";
 import * as virtualSession from "../sessions/virtual.js";
 import { logger } from "../logger.js";
+import type { FragmentType } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -40,6 +41,7 @@ interface MemoryAddArgs {
   project?: string | null;
   source?: string;
   confirm?: boolean;
+  type?: string;
 }
 
 interface MemoryUpdateArgs {
@@ -143,6 +145,20 @@ interface ToolCallRequest {
 let activeSessionId: string | null = null;
 
 let _notifyChange: (() => void) | null = null;
+
+function getSessionContext(): { memoriesAccessed: string[]; memoriesCreated: string[]; guidesUsed: string[] } {
+  const vs = virtualSession.getCurrentVirtualSession();
+  return {
+    memoriesAccessed: vs ? [...vs.memories_accessed] : [],
+    memoriesCreated: vs ? [...vs.memories_created] : [],
+    guidesUsed: vs ? [...vs.guides_used] : [],
+  };
+}
+
+function buildHookBlock(suggestions: string[]): string {
+  if (suggestions.length === 0) return "";
+  return "\n\nSUGGESTED ACTIONS:\n" + suggestions.map(s => `- ${s}`).join("\n");
+}
 
 export function setNotifyChange(fn: () => void): void {
   _notifyChange = fn;
@@ -304,6 +320,43 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
     response += `\nIMPROVEMENT SUGGESTIONS:\n${improvementLines.join("\n")}\n`;
   }
 
+  const sCtx = getSessionContext();
+  const reviewSuggestions: string[] = [];
+
+  if (sCtx.memoriesAccessed.length > 0 || sCtx.memoriesCreated.length > 0 || sCtx.guidesUsed.length > 0) {
+    response += `\nSESSION REVIEW:`;
+    if (sCtx.memoriesAccessed.length > 0) {
+      response += `\n  Memories read: ${sCtx.memoriesAccessed.map(m => `[${m}]`).join(", ")}`;
+    }
+    if (sCtx.memoriesCreated.length > 0) {
+      response += `\n  Memories created: ${sCtx.memoriesCreated.map(m => `[${m}]`).join(", ")}`;
+    }
+    if (sCtx.guidesUsed.length > 0) {
+      response += `\n  Guides used: ${sCtx.guidesUsed.join(", ")}`;
+    }
+    if (session.guides_used && session.guides_used.length > 0) {
+      const notPracticed = session.guides_used.filter(g => !sCtx.guidesUsed.includes(g));
+      if (notPracticed.length > 0) {
+        response += `\n  Guides used but NOT practiced: ${notPracticed.join(", ")}`;
+      }
+    }
+
+    if (sCtx.memoriesCreated.length > 0 && sCtx.memoriesAccessed.length > 0) {
+      reviewSuggestions.push(`New memories ${sCtx.memoriesCreated.map(m => `[${m}]`).join(", ")} and read memories ${sCtx.memoriesAccessed.map(m => `[${m}]`).join(", ")} share this session's context. Call memory_relate if any are connected (type: supports/supersedes/contradicts/related_to).`);
+    }
+    if (sCtx.memoriesCreated.length > 0) {
+      reviewSuggestions.push(`If any created memories represent reusable skills, call guide_distill to promote them.`);
+    }
+    if (session.guides_used && session.guides_used.length > 0) {
+      const notPracticed = session.guides_used.filter(g => !sCtx.guidesUsed.includes(g));
+      if (notPracticed.length > 0) {
+        reviewSuggestions.push(`Guides used but not practiced: ${notPracticed.join(", ")}. Call guide_practice to track experience.`);
+      }
+    }
+  }
+
+  response += buildHookBlock(reviewSuggestions);
+
   logger.flow("session_end", "complete", { session_id: session.session_id, outcome, improvement_suggestions: improvementLines.length });
   return {
     content: [{ type: "text", text: response }],
@@ -392,15 +445,30 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     }
   }
 
+  if (resultIds.size > 1) {
+    const idArray = [...resultIds];
+    for (const id of idArray) {
+      const others = idArray.filter(x => x !== id);
+      core.trackAssociations(memory, id, others);
+    }
+  }
+
   const scopeInfo = showAll ? "all projects" : currentProject || "global";
   const formatted = core.formatMemoryForLLM(results, scopeInfo);
   logger.data("memory.json", "save", { reason: "boost_search_results", boosted_count: resultIds.size });
   core.saveMemory(memory);
   notifyMemoryChange();
 
+  let hookResponse = formatted;
+  if (resultIds.size > 1) {
+    hookResponse += buildHookBlock([
+      `You read ${resultIds.size} fragments together. If any are meaningfully connected, call memory_relate(sourceId, targetId, type).`,
+    ]);
+  }
+
   logger.flow("memory_read", "complete_search", { query, results: (results as any[]).length, scope: scopeInfo });
   return {
-    content: [{ type: "text", text: formatted }],
+    content: [{ type: "text", text: hookResponse }],
   };
 }
 
@@ -410,8 +478,12 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   const description = args?.description || null;
   const project = args?.project === undefined ? null : args.project;
   const source = (args?.source || "ai") as "user" | "ai";
+  const validTypes: FragmentType[] = ["fact", "pattern", "lesson", "warning", "context"];
+  const fragmentType = validTypes.includes((args?.type || "") as FragmentType)
+    ? (args?.type as FragmentType)
+    : "fact";
 
-  logger.flow("memory_add", "start", { title, project, source, has_description: !!description, fragment_length: fragment?.length });
+  logger.flow("memory_add", "start", { title, project, source, type: fragmentType, has_description: !!description, fragment_length: fragment?.length });
 
   if (!fragment || typeof fragment !== "string") {
     logger.warn("memory_add validation failed", { reason: "missing or invalid fragment" });
@@ -445,7 +517,7 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     logger.warn("memory_add secrets_detected", { secret_types: found.map(f => f.type), confirmed: !!args?.confirm });
   }
 
-  const newFragment = core.createFragment(finalFragment, source, title, project, description);
+  const newFragment = core.createFragment(finalFragment, source, title, project, description, fragmentType);
   logger.flow("memory_add", "fragment_created", { id: newFragment.id, title: newFragment.title });
 
   if (activeSessionId) {
@@ -482,6 +554,21 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     }
     response += `\nConsider: Does this update or contradict existing knowledge? Use memory_update to refine or memory_merge to consolidate.`;
   }
+
+  const hookSuggestions: string[] = [];
+  if (overlaps.length > 0) {
+    hookSuggestions.push(`Topic overlap with ${overlaps.map(o => `[${o.id}]`).join(", ")}. Call memory_relate if meaningful (type: supports/supersedes/contradicts/related_to).`);
+  }
+  const sCtx = getSessionContext();
+  const otherAccessed = sCtx.memoriesAccessed.filter(mid => mid !== newFragment.id);
+  if (otherAccessed.length > 0) {
+    hookSuggestions.push(`You read ${otherAccessed.map(m => `[${m}]`).join(", ")} this session. If this new knowledge connects to any, call memory_relate.`);
+  }
+  if (fragmentType === "pattern" || fragmentType === "lesson") {
+    hookSuggestions.push(`This is a ${fragmentType}. Consider guide_distill to promote it into a reusable skill.`);
+  }
+  response += buildHookBlock(hookSuggestions);
+
   logger.flow("memory_add", "complete", { id: newFragment.id, title: newFragment.title, overlaps: overlaps.length });
   return {
     content: [{ type: "text", text: response }],
@@ -557,9 +644,16 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
   core.saveMemory(memory);
   notifyMemoryChange();
 
+  let updateResponse = `Updated fragment [${id}]: "${memory[targetIndex].title}"`;
+  if (fragment !== undefined) {
+    updateResponse += buildHookBlock([
+      `Content changed for [${id}]. Relations may need updating. Call memory_relate if new content supports/contradicts/supersedes existing knowledge.`,
+    ]);
+  }
+
   logger.flow("memory_update", "complete", { id, title: memory[targetIndex].title });
   return {
-    content: [{ type: "text", text: `Updated fragment [${id}]: "${memory[targetIndex].title}"` }],
+    content: [{ type: "text", text: updateResponse }],
   };
 }
 
@@ -641,7 +735,9 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_positive", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${memory[targetIndex].confidence.toFixed(2)}.` }],
+      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${memory[targetIndex].confidence.toFixed(2)}.` + buildHookBlock([
+        `If this knowledge represents a reusable skill, call guide_distill(memory_id="${id}", guide="...") to promote it.`,
+      ]) }],
     };
   } else {
     const penalized = core.recordNegativeHit(memory[targetIndex]);
@@ -652,7 +748,9 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_negative", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${memory[targetIndex].confidence.toFixed(2)}.` }],
+      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${memory[targetIndex].confidence.toFixed(2)}.` + buildHookBlock([
+        `If this knowledge is outdated or incorrect: memory_update(id="${id}") to correct, memory_forget(id="${id}") to remove, or memory_relate(type="contradicts") if a newer fragment supersedes it.`,
+      ]) }],
     };
   }
 }
@@ -703,17 +801,87 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
 
   const newFragment = core.createFragment(fragment, "ai" as const, title, project);
   logger.flow("memory_merge", "merged_fragment_created", { new_id: newFragment.id, title });
-  memory.push(newFragment);
+
+  const sourceFrags = ids.map((id: string) => memory.find((f: any) => f.id === id)).filter(Boolean) as any[];
+  const inheritedRelations: any[] = [];
+  const inheritedGuides: string[] = [];
+  for (const src of sourceFrags) {
+    if (src.relations) {
+      for (const rel of src.relations) {
+        if (!ids.includes(rel.id) && !inheritedRelations.find(r => r.id === rel.id && r.type === rel.type)) {
+          inheritedRelations.push({ ...rel });
+        }
+      }
+    }
+    if (src.related_guides) {
+      for (const g of src.related_guides) {
+        if (!inheritedGuides.includes(g)) inheritedGuides.push(g);
+      }
+    }
+    if (src.associatedWith) {
+      for (const assocId of src.associatedWith) {
+        if (!ids.includes(assocId) && !(newFragment.associatedWith || []).includes(assocId)) {
+          if (!newFragment.associatedWith) newFragment.associatedWith = [];
+          newFragment.associatedWith.push(assocId);
+        }
+      }
+    }
+  }
+  newFragment.relations = inheritedRelations;
+  newFragment.related_guides = inheritedGuides;
 
   const mergedMemory = memory.filter((f: any) => !ids.includes(f.id));
+
+  for (const frag of mergedMemory) {
+    if (frag.associatedWith) {
+      frag.associatedWith = frag.associatedWith.map((aId: string) => ids.includes(aId) ? newFragment.id : aId);
+      frag.associatedWith = [...new Set(frag.associatedWith)];
+    }
+    if (frag.relations) {
+      for (const rel of frag.relations) {
+        if (ids.includes(rel.id)) {
+          rel.id = newFragment.id;
+        }
+      }
+    }
+  }
+
+  const allGuides = guides.loadGuides();
+  for (const g of allGuides) {
+    if (g.source_memories) {
+      g.source_memories = g.source_memories.map((mId: string) => ids.includes(mId) ? newFragment.id : mId);
+      g.source_memories = [...new Set(g.source_memories)];
+    }
+    if (g.validated_by) {
+      g.validated_by = g.validated_by.map((mId: string) => ids.includes(mId) ? newFragment.id : mId);
+      g.validated_by = [...new Set(g.validated_by)];
+    }
+  }
+  guides.saveGuides(allGuides);
+
+  memory.push(newFragment);
+  mergedMemory.push(newFragment);
+
   logger.data("memory.json", "save", { reason: "merge_fragments", new_id: newFragment.id, removed_ids: ids, before: memory.length, after: mergedMemory.length });
   core.saveMemory(mergedMemory);
   notifyMemoryChange();
 
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
+  let response = `Merged ${ids.length} fragments into [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nRemoved IDs: ${ids.join(", ")}`;
+
+  if (inheritedRelations.length > 0 || inheritedGuides.length > 0) {
+    response += `\n\nINHERITED CONNECTIONS:`;
+    if (inheritedRelations.length > 0) {
+      response += `\n- Relations: ${inheritedRelations.map(r => `[${r.id}] ${r.type}`).join(", ")}`;
+    }
+    if (inheritedGuides.length > 0) {
+      response += `\n- Guides: ${inheritedGuides.join(", ")}`;
+    }
+  }
+
   logger.flow("memory_merge", "complete", { new_id: newFragment.id, merged_count: ids.length });
   return {
-    content: [{ type: "text", text: `Merged ${ids.length} fragments into [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nRemoved IDs: ${ids.join(", ")}` }],
+    content: [{ type: "text", text: response }],
   };
 }
 
@@ -859,6 +1027,27 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
       if (!session.guides_used.includes(guideName.toLowerCase())) {
         session.guides_used.push(guideName.toLowerCase());
       }
+
+      if (session.memories_read && session.memories_read.length > 0) {
+        const normalizedName = guideName.toLowerCase().trim();
+        if (!updated.validated_by) updated.validated_by = [];
+        const memory: any[] = core.loadMemory();
+        for (const memId of session.memories_read) {
+          if (!updated.validated_by.includes(memId)) {
+            updated.validated_by.push(memId);
+          }
+          const memFrag = memory.find((f: any) => f.id === memId);
+          if (memFrag) {
+            if (!memFrag.related_guides) memFrag.related_guides = [];
+            if (!memFrag.related_guides.includes(normalizedName)) {
+              memFrag.related_guides.push(normalizedName);
+            }
+          }
+        }
+        logger.data("memory.json", "save", { reason: "practice_validation_links", guide: guideName, memories_linked: session.memories_read.length });
+        core.saveMemory(memory);
+      }
+
       logger.data("sessions.json", "save", { reason: "track_guide_practice", session_id: activeSessionId, guide: guideName });
       sessions.saveSessions(allSessions);
     }
@@ -869,7 +1058,18 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
 
   const isNew = updated.usage_count === 1;
   const action = isNew ? "Created" : "Updated";
-  const response = `${action} guide "${updated.guide}" (${updated.category}): ${updated.usage_count}x usage, ${updated.learnings.length} learnings, ${updated.contexts.length} contexts`;
+  let response = `${action} guide "${updated.guide}" (${updated.category}): ${updated.usage_count}x usage, ${updated.learnings.length} learnings, ${updated.contexts.length} contexts`;
+
+  const pCtx = getSessionContext();
+  const hookSuggestions: string[] = [];
+  if (pCtx.memoriesAccessed.length > 0) {
+    hookSuggestions.push(`Memories read this session: ${pCtx.memoriesAccessed.map(m => `[${m}]`).join(", ")}. If any informed this guide, call guide_distill to promote them.`);
+  }
+  const totalAttempts = (updated.success_count || 0) + (updated.failure_count || 0);
+  if (totalAttempts >= 3 && (updated.success_count || 0) / totalAttempts < 0.4) {
+    hookSuggestions.push(`Guide "${updated.guide}" success rate is ${((updated.success_count || 0) / totalAttempts).toFixed(2)} (${updated.success_count}/${totalAttempts}). Consider guide_update to refine.`);
+  }
+  response += buildHookBlock(hookSuggestions);
 
   logger.flow("guide_practice", "complete", { guide: guideName, action, usage_count: updated.usage_count });
   return {
@@ -915,7 +1115,9 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
 
   logger.flow("guide_create", "complete", { guide: guideName, category, is_new: true });
   return {
-    content: [{ type: "text", text: `Created new guide "${newGuide.guide}" (${newGuide.category}) with a detailed manual.` }],
+    content: [{ type: "text", text: `Created new guide "${newGuide.guide}" (${newGuide.category}) with a detailed manual.` + buildHookBlock([
+      `Start tracking with guide_practice when you use it. If existing memories informed this guide, call guide_distill to link them.`,
+    ]) }],
   };
 }
 
@@ -958,11 +1160,30 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
     fragment.project || "global"
   );
 
+  if (!updated.source_memories) updated.source_memories = [];
+  if (!updated.source_memories.includes(memoryId)) {
+    updated.source_memories.push(memoryId);
+  }
+  if (!fragment.related_guides) fragment.related_guides = [];
+  const normalizedName = guideName.toLowerCase().trim();
+  if (!fragment.related_guides.includes(normalizedName)) {
+    fragment.related_guides.push(normalizedName);
+  }
+
+  core.saveMemory(allMemory);
   logger.data("guides.json", "save", { reason: "distill_memory_to_guide", memory_id: memoryId, guide: guideName });
   guides.saveGuides(allGuides);
 
   let response = `Successfully distilled memory [${memoryId}] into guide "${updated.guide}" (${updated.category}).\n\n`;
   response += guides.formatGuideDetail(updated);
+
+  const distillOverlaps = core.findTopicOverlaps(allMemory, fragment.fragment, fragment.project, 3);
+  const distillHookSuggestions: string[] = [];
+  const relatedMemories = distillOverlaps.filter(o => o.id !== memoryId);
+  if (relatedMemories.length > 0) {
+    distillHookSuggestions.push(`Related memories that might also inform guide "${updated.guide}": ${relatedMemories.map(m => `[${m.id}] "${m.title}"`).join(", ")}. Consider guide_distill for these too.`);
+  }
+  response += buildHookBlock(distillHookSuggestions);
 
   logger.flow("guide_distill", "complete", { memory_id: memoryId, guide: guideName, category });
   return {
@@ -1122,6 +1343,15 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
   let response = `Merged ${guideNames.length} guides into "${newGuide.guide}" (${newGuide.category})\n`;
   response += `Total usage: ${totalUsage}x | Contexts: ${contexts.length} | Learnings: ${learnings.length}\n`;
   response += `Removed: ${guideNames.join(", ")}`;
+
+  const mergeHookSuggestions: string[] = [];
+  if (antiPatterns.length > 0) mergeHookSuggestions.push(`Anti-patterns inherited: ${antiPatterns.length}`);
+  if (pitfalls.length > 0) mergeHookSuggestions.push(`Pitfalls inherited: ${pitfalls.length}`);
+  const allSourceMemories = sourceGuides.flatMap((g: any) => g.source_memories || []).filter(Boolean);
+  if (allSourceMemories.length > 0) mergeHookSuggestions.push(`Source memories linked: ${allSourceMemories.length} fragment(s)`);
+  const allValidatedBy = sourceGuides.flatMap((g: any) => g.validated_by || []).filter(Boolean);
+  if (allValidatedBy.length > 0) mergeHookSuggestions.push(`Validated by: ${allValidatedBy.length} fragment(s)`);
+  response += buildHookBlock(mergeHookSuggestions);
 
   logger.flow("guide_merge", "complete", { new_guide: newGuideName, merged_count: guideNames.length, total_usage: totalUsage });
   return {

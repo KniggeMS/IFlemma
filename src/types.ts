@@ -1,3 +1,5 @@
+export type FragmentType = "fact" | "pattern" | "lesson" | "warning" | "context";
+
 export interface MemoryRelation {
   id: string;
   type: "contradicts" | "supersedes" | "supports" | "related_to";
@@ -30,6 +32,8 @@ export interface MemoryFragment {
   positive_feedback: number;
   negative_feedback: number;
   last_refined: string | null;
+  type: FragmentType;
+  related_guides: string[];
 }
 
 export interface Guide {
@@ -50,6 +54,8 @@ export interface Guide {
   enables: string[];
   superseded_by: string | null;
   deprecated: boolean;
+  source_memories: string[];
+  validated_by: string[];
 }
 
 export interface Session {

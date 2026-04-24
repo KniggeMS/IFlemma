@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import Fuse from "fuse.js";
-import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult } from "../types.js";
+import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult, FragmentType } from "../types.js";
 import { logger } from "../logger.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
@@ -43,14 +43,14 @@ function generateDescription(fragment: string, title: string): string {
   return fragment.substring(0, 80).trim() + '...';
 }
 
-export function createFragment(fragment: string, source: "user" | "ai", title: string | null = null, project: string | null = null, description: string | null = null): MemoryFragment {
+export function createFragment(fragment: string, source: "user" | "ai", title: string | null = null, project: string | null = null, description: string | null = null, type: FragmentType = "fact"): MemoryFragment {
   const autoTitle = title || (fragment.length > 40 ? fragment.substring(0, 40) + "..." : fragment);
   const autoDescription = description || generateDescription(fragment, autoTitle);
 
   const now = new Date();
   const id = generateId();
 
-  logger.flow("fragment", "create", { id, title: autoTitle, project });
+  logger.flow("fragment", "create", { id, title: autoTitle, project, type });
 
   return {
     id: id,
@@ -76,7 +76,9 @@ export function createFragment(fragment: string, source: "user" | "ai", title: s
     outcome: null,
     positive_feedback: 0,
     negative_feedback: 0,
-    last_refined: null
+    last_refined: null,
+    type: type,
+    related_guides: [],
   };
 }
 

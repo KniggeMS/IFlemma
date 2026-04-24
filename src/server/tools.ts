@@ -120,15 +120,15 @@ export const TOOLS: ToolDefinition[] = [
       properties: {
         fragment: {
           type: "string",
-          description: "The memory fragment text to store",
+          description: "The memory fragment text to store. Follow this format:\n## [Topic Title]\n[1-2 sentences of context: what and why it matters]\n- [Key fact 1]\n- [Key fact 2]\n- [Constraint or note if any]\nKeep fragments between 30-2000 characters. Use structured markdown, not plain prose.",
         },
         title: {
           type: "string",
-          description: "Short title for the memory (auto-generated if not provided)",
+          description: "Short title for the memory (auto-generated if not provided). Max 80 characters.",
         },
         description: {
           type: "string",
-          description: "Short description/summary (auto-generated if not provided)",
+          description: "Short description/summary (auto-generated if not provided). Max 150 characters.",
         },
         project: {
           type: "string",
@@ -144,6 +144,11 @@ export const TOOLS: ToolDefinition[] = [
           type: "boolean",
           description: "Set to true to store fragment as-is even if secrets are detected. Default: false (auto-redacts).",
           default: false,
+        },
+        type: {
+          type: "string",
+          enum: ["fact", "pattern", "lesson", "warning", "context"],
+          description: "Fragment type. 'fact'=technical info, 'pattern'=repeated solution, 'lesson'=learned from experience, 'warning'=caution/gotcha, 'context'=environment info. Default: 'fact'.",
         },
       },
       required: ["fragment"],

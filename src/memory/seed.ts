@@ -163,6 +163,8 @@ export function seedMemory(memory: MemoryFragment[]): { seeded: number; skipped:
       positive_feedback: 0,
       negative_feedback: 0,
       last_refined: null,
+      type: "fact",
+      related_guides: [],
     };
 
     memory.push(fragment);

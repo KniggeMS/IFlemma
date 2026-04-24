@@ -358,13 +358,13 @@ describe("Dynamic System Prompt", () => {
   describe("getDynamicSystemPrompt", () => {
     test("returns base prompt when no project", async () => {
       const prompt = await getDynamicSystemPrompt(null);
-      assert.ok(prompt.includes("Lemma — Persistent Memory"));
+      assert.ok(prompt.includes("persistent long-term memory powered by Lemma"));
       assert.ok(!prompt.includes("<project_context>"));
     });
 
     test("returns base prompt when project has no memories", async () => {
       const prompt = await getDynamicSystemPrompt("EmptyProject");
-      assert.ok(prompt.includes("Lemma — Persistent Memory"));
+      assert.ok(prompt.includes("persistent long-term memory powered by Lemma"));
       assert.ok(!prompt.includes("<project_context>"));
     });
 

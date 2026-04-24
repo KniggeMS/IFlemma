@@ -6,7 +6,7 @@
 
 [English](README.md) | [Türkçe](docs/README.tr.md)
 
-Lemma is a Model Context Protocol (MCP) server that provides a persistent memory layer for Large Language Models. It enables LLMs to remember facts, preferences, and context across sessions through a biological memory model with automatic decay, learning, and universal injection.
+Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills.
 
 ## Quick Start
 
@@ -27,117 +27,110 @@ Add Lemma to your MCP client configuration:
 }
 ```
 
-> Using `@latest` ensures npx always fetches the newest version. Without it, npx caches the first version it downloads.
+> Using `@latest` ensures npx always fetches the newest version.
 
 **Requirements:** Node.js 18.0.0 or higher
-
-## What is Lemma?
-
-Lemma acts as an external hippocampus for AI assistants. The human brain does not record everything — it synthesizes, distills, and leaves behind fragments. Frequently accessed knowledge grows stronger; unused knowledge fades and is forgotten.
-
-Lemma operates on the same principle:
-
-- **Raw conversations are never stored** — only synthesized fragments
-- **Fragments decay over time** — frequently accessed ones strengthen
-- **Used knowledge gains context** — tags and associations are built automatically
-- **Memories are injected automatically** — LLM sees them without calling tools
 
 ## How It Works
 
 ### Universal Memory Injection
 
-Lemma injects memories directly into tool descriptions via `tools/list`. This works on **every MCP client** — Claude Desktop, Cursor, VS Code, opencode, Gemini CLI, and others.
-
-```
-tools/list → memory_read description includes:
-  "YOUR MEMORIES (you already know these):
-   [m8f728] React Architecture (95%)
-   Full content here...
-   [m1bbea] Clean Code Research (77%)
-   Full content here..."
-```
-
-The LLM starts every session already knowing its most important memories. No explicit tool call needed.
-
-**Dual injection:**
-1. **Tool descriptions** — universal, works everywhere
-2. **`instructions` field** — for clients that support MCP initialize instructions
+Memories are injected into tool descriptions via `tools/list`. The LLM starts every session already knowing its most important memories — works on every MCP client.
 
 **3-layer architecture:**
-- Layer 1: Full content for top memories (~3000 tokens, configurable)
+- Layer 1: Full content for top memories (token-budgeted)
 - Layer 2: Summary index for remaining memories
-- Layer 3: Active guides with descriptions and learnings
+- Layer 3: Active guides with learnings
 
-### Memory Structure
+### Fragment Types
 
-Each memory fragment has:
+Every memory fragment has a type that classifies its nature:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Unique identifier (`m` + 12 hex chars from crypto.randomUUID) |
-| `title` | string | Short title for quick scanning |
-| `fragment` | string | Synthesized memory text |
-| `project` | string | Project scope (`null` for global) |
-| `confidence` | float | Reliability 0.0-1.0 (decays and boosts over time) |
-| `source` | string | `"user"` or `"ai"` |
-| `created` | string | Creation date (YYYY-MM-DD) |
-| `lastAccessed` | string | ISO timestamp of last read |
-| `accessed` | int | Access count in current decay cycle |
-| `tags` | string[] | Context tags from usage (e.g., "debugging", "refactoring") |
-| `associatedWith` | string[] | IDs of fragments accessed in the same session |
-| `negativeHits` | int | Times this memory was marked unhelpful (resets per session) |
+| Type | Use For | Example |
+|------|---------|---------|
+| `fact` | Technical info, API behavior, versions | "Node.js 22 has native fetch" |
+| `pattern` | Repeated solution, best practice | "React useEffect cleanup pattern" |
+| `lesson` | Learned from experience, debugging | "JSONL parse errors silently swallow broken lines" |
+| `warning` | Caution, gotcha, pitfall | "fs.writeFileSync blocks the event loop" |
+| `context` | Environment info, project setup | "This project uses Python 3.11 with py launcher" |
+
+Default is `fact` if not specified.
+
+### Memory ↔ Guide Pipeline
+
+Knowledge flows through a two-way pipeline:
+
+1. **Memory** = WHAT you know — facts, observations, technical details (`memory_add`)
+2. **Guide** = HOW you work — accumulated experience, procedural skills (`guide_practice`, `guide_distill`)
+
+Connections are **bidirectional** and automatic:
+- `guide_distill` → links memory to guide AND guide to memory
+- `guide_practice` → session-read memories validate the guide
+- `memory_merge` → relations, guide links, and associations are inherited by the merged fragment
+
+### Response Hooks (Suggested Actions)
+
+Tool responses include contextual `SUGGESTED ACTIONS` when meaningful connections are detected. For example:
+
+- `memory_add` with topic overlap → "Call `memory_relate` to link these fragments"
+- `memory_add` with type `pattern` → "Call `guide_distill` to promote into a skill"
+- `memory_feedback` positive → "Call `guide_distill` to convert into a reusable skill"
+- `session_end` with activity → Full review with relate + distill + practice suggestions
+
+Hooks only appear when there's meaningful context — no noise in empty states.
 
 ### Learning System
 
-Unlike static memory, Lemma uses a biological model where knowledge evolves through use:
+Knowledge evolves through use with a biological memory model:
 
-**Boost (on access):**
-```
-confidence = min(1.0, confidence + 0.015)
-tags += context_tag  (e.g., "debugging")
-associatedWith += co_accessed_fragment_ids
-```
-
-**Decay (per session, only unused fragments):**
-```
-if accessed == 0:
-    confidence = confidence - 0.002
-if accessed > 0:
-    no decay (shield — used knowledge is protected)
-```
-
-- **Shield**: Frequently accessed items are protected from decay entirely
-- **Unused items** decay very slowly at 0.002 per session
-- **Negative feedback** reduces confidence by -0.02 (was -0.1)
-- **Associations**: Fragments used together build cross-references for future recall
+- **Shield**: Accessed items are protected from decay entirely
+- **Unused items** decay very slowly (0.002 per session)
+- **Negative feedback** reduces confidence by -0.02
+- **Associations**: Fragments used together build cross-references automatically
 - **No time-based decay**: Confidence only changes when the system is actively used
 
-### Deduplication
+### Memory Structure
 
-Lemma uses **Fuse.js fuzzy matching** (not Jaccard) for dedup:
-- "Use React hooks" vs "Don't use React hooks" — correctly detected as different
-- "react", "reactjs", "React.js" — correctly detected as same (for guides)
-- Applies to both user and AI sourced memories
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier (`m` + 12 hex chars) |
+| `title` | string | Short title |
+| `fragment` | string | Synthesized memory text |
+| `type` | FragmentType | `fact`, `pattern`, `lesson`, `warning`, or `context` |
+| `project` | string | Project scope (`null` for global) |
+| `confidence` | float | Reliability 0.0-1.0 |
+| `source` | string | `"user"` or `"ai"` |
+| `relations` | MemoryRelation[] | Typed links to other fragments |
+| `related_guides` | string[] | Guide names this fragment informs |
+| `associatedWith` | string[] | IDs of co-accessed fragments |
+| `tags` | string[] | Context tags from usage |
+| `accessed` | int | Access count in current decay cycle |
+
+### Guide Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `guide` | string | Guide name |
+| `category` | string | Category (e.g., `web-frontend`, `dev-tool`) |
+| `description` | string | Full manual/protocols |
+| `source_memories` | string[] | Memory IDs that spawned this guide |
+| `validated_by` | string[] | Memory IDs that validated this guide in practice |
+| `usage_count` | int | Times practiced |
+| `success_count` | int | Successful uses |
+| `failure_count` | int | Failed uses |
+| `learnings` | string[] | Accumulated learnings |
+| `contexts` | string[] | Contexts where used |
 
 ### Virtual Sessions
 
 Tool calls are automatically correlated into virtual sessions:
-- Auto-starts on first tool call
-- Auto-finalizes after 30 minutes of inactivity
-- Tracks technologies seen, guides used, memories created
+- Auto-starts on first tool call, auto-finalizes after 30 min inactivity
+- Tracks technologies seen, guides used, memories created/accessed
 - No explicit `session_start`/`session_end` required
-- Sessions stored in `~/.lemma/sessions/`
-
-### Data Safety
-
-- **Cumulative backup**: `.bak` files are ID-based merges — never overwrites existing entries
-- **File locking**: Module-level write lock prevents concurrent data corruption
-- **Safe I/O**: Empty/null arrays rejected before writing
-- **No implicit deletion**: Decay only reduces confidence, never removes fragments
 
 ### Configuration
 
-Optional config file at `~/.lemma/config.json`:
+Optional config at `~/.lemma/config.json`:
 
 ```json
 {
@@ -166,67 +159,7 @@ Optional config file at `~/.lemma/config.json`:
 | **macOS** | `/Users/{username}/.lemma/` |
 | **Linux** | `/home/{username}/.lemma/` |
 
-Files:
-- `memory.jsonl` — memory fragments
-- `guides.jsonl` — experience guides
-- `config.json` — user configuration (optional)
-- `sessions/` — virtual session logs
-- `logs/` — debug and error logs (auto-rotated daily)
-- `.bak` files — cumulative backups
-
-## Hook System
-
-### Lifecycle Hooks
-
-```javascript
-import { registerHook, HookTypes } from "@lemma/lemma/server";
-
-registerHook(HookTypes.ON_START, async (context) => {
-  console.log("Server started!", context);
-});
-
-registerHook(HookTypes.ON_PROJECT_CHANGE, async (context) => {
-  console.log(`Project changed to: ${context.project}`);
-});
-```
-
-### Prompt Modifiers
-
-Extend the system prompt generation with custom transformations:
-
-```javascript
-import { registerPromptModifier } from "lemma-mcp/server";
-
-registerPromptModifier(async (prompt, context) => {
-  if (context.project === "my-app") {
-    return prompt + "\n\n<custom>Note: Using experimental features.</custom>";
-  }
-  return prompt;
-});
-```
-
----
-
-## Manual Installation
-
-Clone and run locally:
-
-```bash
-git clone https://github.com/xenitV1/lemma
-cd Lemma
-npm install
-```
-
-```json
-{
-  "mcpServers": {
-    "lemma": {
-      "command": "node",
-      "args": ["C:\\path\\to\\Lemma\\dist\\index.js"]
-    }
-  }
-}
-```
+Files: `memory.jsonl`, `guides.jsonl`, `config.json`, `sessions/`, `logs/`, `.bak` backups
 
 ---
 
@@ -254,12 +187,13 @@ Read memory fragments. SUMMARY MODE shows title + description; use `id` for full
 **MANDATORY:** Call AFTER completing analysis to save findings. Automatically redacts secrets unless `confirm: true`.
 
 **Parameters:**
-- `fragment` (string, required): The memory text to store
-- `title` (string, optional): Short title
-- `description` (string, optional): Short summary
+- `fragment` (string, required): Memory text. Use structured markdown: `## [Topic]\n[Context]\n- [Key points]`
+- `title` (string, optional): Short title (max 80 chars)
+- `description` (string, optional): Short summary (max 150 chars)
 - `project` (string, optional): Project scope (null = global)
 - `source` (string, optional): "user" or "ai", default "ai"
 - `confirm` (boolean, optional): Store as-is even if secrets detected (default: false)
+- `type` (string, optional): Fragment type — `fact`, `pattern`, `lesson`, `warning`, or `context` (default: `fact`)
 
 #### `memory_update`
 
@@ -288,7 +222,7 @@ Remove a memory fragment by ID.
 
 #### `memory_merge`
 
-Merge multiple fragments into one. Creates new ID, deletes originals.
+Merge multiple fragments into one. Relations, guide links, and associations are inherited by the merged fragment.
 
 **Parameters:**
 - `ids` (string[], required): Fragment IDs to merge
@@ -298,39 +232,39 @@ Merge multiple fragments into one. Creates new ID, deletes originals.
 
 #### `memory_relate`
 
-Create a typed relation between two memory fragments.
+Create a typed relation between two memory fragments. Bidirectional — reverse relation auto-created.
 
 **Parameters:**
 - `sourceId` (string, required): Source fragment ID
 - `targetId` (string, required): Target fragment ID
-- `type` (string, required): One of `contradicts`, `supersedes`, `supports`, `related_to`
+- `type` (string, required): `contradicts`, `supersedes`, `supports`, or `related_to`
 - `note` (string, optional): Note explaining the relation
 
 #### `memory_stats`
 
-Get memory store statistics: fragment counts, average confidence, project breakdown.
+Get memory store statistics.
 
 **Parameters:**
 - `project` (string, optional): Filter by project
 
 #### `memory_audit`
 
-Audit memory store for integrity issues: orphan references, duplicate IDs, confidence anomalies.
+Audit memory store for integrity issues.
 
 ### Guide Tools (8)
 
 #### `guide_get`
 
-Get tracked guides with usage statistics. Returns guides sorted by usage count (most used first).
+Get guides with usage statistics, sorted by usage count.
 
 **Parameters:**
 - `category` (string, optional): Filter by category
 - `guide` (string, optional): Get detail for specific guide
-- `task` (string, optional): Task description to get relevant guide suggestions
+- `task` (string, optional): Task description to get relevant suggestions
 
 #### `guide_practice`
 
-**MANDATORY:** Record guide usage when you use a guide during work.
+**MANDATORY:** Record guide usage during work.
 
 **Parameters:**
 - `guide` (string, required): Guide name
@@ -338,7 +272,7 @@ Get tracked guides with usage statistics. Returns guides sorted by usage count (
 - `description` (string, optional): Detailed manual/protocols
 - `contexts` (string[], required): Contexts where used
 - `learnings` (string[], required): New learnings discovered
-- `outcome` (string, optional): "success" or "failure" — tracks success rate
+- `outcome` (string, optional): "success" or "failure"
 
 #### `guide_create`
 
@@ -353,7 +287,7 @@ Create a guide with a detailed manual.
 
 #### `guide_distill`
 
-Transform a memory fragment into a guide's learning.
+Transform a memory fragment into a guide's learning. Creates bidirectional link (memory ↔ guide).
 
 **Parameters:**
 - `memory_id` (string, required): Memory fragment ID
@@ -371,7 +305,7 @@ Update an existing guide's properties.
 - `description` (string, optional): New description/manual
 - `add_anti_patterns` (string[], optional): Add anti-patterns
 - `add_pitfalls` (string[], optional): Add known pitfalls
-- `superseded_by` (string, optional): Mark as superseded by another guide
+- `superseded_by` (string, optional): Mark as superseded
 - `deprecated` (boolean, optional): Mark as deprecated
 
 #### `guide_forget`
@@ -383,7 +317,7 @@ Remove a guide.
 
 #### `guide_merge`
 
-Merge multiple guides into one. Usage counts are summed.
+Merge multiple guides into one. Source memories and validations are inherited.
 
 **Parameters:**
 - `guides` (string[], required): Guide names to merge
@@ -397,7 +331,7 @@ Merge multiple guides into one. Usage counts are summed.
 
 #### `session_start`
 
-Start a traced work session. Records task metadata and returns relevant guides + pre-loaded memories.
+Start a traced work session. Pre-loads relevant guides and memories.
 
 **Parameters:**
 - `task_type` (string, required): "debugging", "implementation", "refactoring", "testing", "research", "documentation", "optimization", or "other"
@@ -406,7 +340,7 @@ Start a traced work session. Records task metadata and returns relevant guides +
 
 #### `session_end`
 
-End the current session. Records outcome and updates guide success tracking.
+End the current session. Shows SESSION REVIEW with activity summary and suggestions.
 
 **Parameters:**
 - `outcome` (string, required): "success", "partial", "failure", or "abandoned"
@@ -415,45 +349,38 @@ End the current session. Records outcome and updates guide success tracking.
 
 #### `session_stats`
 
-Get virtual session statistics: recent tool usage patterns and technologies.
+Get virtual session statistics.
 
 **Parameters:**
 - `count` (number, optional): Number of recent sessions (default 10)
 
-## Philosophy
+---
 
-### What Should Be Stored
+## Manual Installation
 
-**User Layer:**
-- User preferences (communication style, format, language)
-- Project context (technology stack, folder structure, conventions)
-- Explicitly requested memories
+```bash
+git clone https://github.com/xenitV1/lemma
+cd Lemma
+npm install
+```
 
-**Capability Layer:**
-- Successful solutions and approaches used
-- Shortcuts discovered for recurring tasks
-- Approaches that were tried and failed
-
-### What Should NOT Be Stored
-
-- Raw conversation content
-- One-off questions that won't recur
-- Temporary or highly context-specific information
-- Personal or sensitive data
+```json
+{
+  "mcpServers": {
+    "lemma": {
+      "command": "node",
+      "args": ["C:\\path\\to\\Lemma\\dist\\index.js"]
+    }
+  }
+}
+```
 
 ## Development
 
-### Running Tests
-
 ```bash
-npm test
-```
-
-415 tests covering memory core, guides core, handlers, learning lifecycle, hook system, dynamic prompt generation, virtual sessions, privacy filtering, query filters, topic overlap, relations, injection ranking, and session pre-loading. All I/O is isolated to temp directories.
-
-```bash
+npm test            # 481 tests
 npm run typecheck   # TypeScript type checking
-npm run build       # Compile TypeScript to dist/
+npm run build       # Compile to dist/
 ```
 
 ### Project Structure
@@ -462,31 +389,25 @@ npm run build       # Compile TypeScript to dist/
 Lemma/
 ├── src/
 │   ├── index.ts              # MCP server entry point
-│   ├── types.ts              # Shared TypeScript interfaces
+│   ├── types.ts              # Shared TypeScript interfaces (MemoryFragment, Guide, FragmentType...)
 │   ├── memory/
-│   │   ├── index.ts          # Memory module re-exports
-│   │   ├── core.ts           # Core memory logic, decay, search, dedup, relations
+│   │   ├── core.ts           # Core memory logic, decay, search, dedup, relations, associations
 │   │   ├── config.ts         # User configuration loader
+│   │   ├── seed.ts           # Built-in seed knowledge fragments
 │   │   └── privacy.ts        # Secret scanning and redaction
 │   ├── guides/
-│   │   ├── index.ts          # Guides module re-exports
-│   │   ├── core.ts           # Core guides logic, fuzzy dedup
+│   │   ├── core.ts           # Core guides logic, fuzzy dedup, source_memories, validated_by
 │   │   └── task-map.ts       # Task-to-guide mapping
 │   ├── server/
 │   │   ├── index.ts          # Server setup, injection, notifications
-│   │   ├── handlers.ts       # Tool handlers (20 tools)
+│   │   ├── handlers.ts       # Tool handlers (21 tools) + response hooks
 │   │   ├── tools.ts          # Tool definitions
 │   │   ├── hooks.ts          # Hook system & prompt modifiers
 │   │   └── system-prompt.ts  # Dynamic system prompt
 │   └── sessions/
-│       ├── index.ts          # Sessions module re-exports
 │       ├── core.ts           # Session lifecycle
 │       └── virtual.ts        # Virtual session tracking
-├── tests/
-│   ├── memory/               # 7 test files
-│   ├── guides/               # 6 test files
-│   ├── sessions/             # 2 test files
-│   └── server/               # 10 test files
+├── tests/                    # 36 test files, 481 tests
 ├── docs/                     # Research papers and references
 ├── package.json
 ├── tsconfig.json
@@ -496,7 +417,7 @@ Lemma/
 
 ## Security
 
-All data is stored locally in `~/.lemma/`. Nothing is ever sent to external servers. Users can inspect, edit, or clear data at any time via the MCP tools or directly.
+All data is stored locally in `~/.lemma/`. Nothing is sent to external servers. Secrets are automatically redacted from memory fragments.
 
 ## License
 

@@ -113,10 +113,14 @@ function extractSessionData(tool: string, args: any, result: any, session: Virtu
   switch (tool) {
     case "memory_read":
       if (args?.id) session.memories_accessed.push(args.id);
+      if (args?.ids) {
+        for (const id of args.ids) session.memories_accessed.push(id);
+      }
       break;
     case "memory_add":
       if (args?.project) session.project = args.project;
-      if (args?.title) session.memories_created.push(args.title);
+      const addedId = result?.content?.[0]?.text?.match(/\[(m[0-9a-f]+)\]/)?.[1];
+      if (addedId) session.memories_created.push(addedId);
       break;
     case "guide_practice":
       if (args?.guide) session.guides_used.add(args.guide.toLowerCase());

@@ -58,7 +58,9 @@ export function createGuide(
     depends_on: [],
     enables: [],
     superseded_by: null,
-    deprecated: false
+    deprecated: false,
+    source_memories: [],
+    validated_by: [],
   };
   logger.flow("guide_create", "created", { id: result.id });
   return result;
