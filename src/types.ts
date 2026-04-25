@@ -34,6 +34,7 @@ export interface MemoryFragment {
   last_refined: string | null;
   type: FragmentType;
   related_guides: string[];
+  distill_candidate?: boolean;
 }
 
 export interface Guide {
@@ -47,6 +48,7 @@ export interface Guide {
   learnings: string[];
   success_count: number;
   failure_count: number;
+  auto_usage_count: number;
   anti_patterns: string[];
   known_pitfalls: string[];
   last_refined: string | null;

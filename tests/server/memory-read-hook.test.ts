@@ -33,7 +33,7 @@ function seedFragments(texts: string[]): MemoryFragment[] {
 }
 
 describe("memory_read response hooks", () => {
-  test("includes SUGGESTED ACTIONS mentioning memory_relate when search returns multiple fragments", async () => {
+  test("includes Auto-linked when search returns multiple fragments", async () => {
     seedFragments([
       "React hooks useState pattern for local state",
       "React hooks useEffect cleanup on unmount",
@@ -41,8 +41,7 @@ describe("memory_read response hooks", () => {
     ]);
     const result = await handleMemoryRead({ query: "React hooks" });
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes("memory_relate"));
+    assert.ok(result.content[0].text.includes("Auto-linked"));
   });
 
   test("does NOT include SUGGESTED ACTIONS when single fragment returned by ID", async () => {

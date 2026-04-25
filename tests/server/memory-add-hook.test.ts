@@ -33,15 +33,14 @@ function seedFragment(text: string, project: string | null = null): MemoryFragme
 }
 
 describe("memory_add response hooks", () => {
-  test("includes SUGGESTED ACTIONS when topic overlaps exist", async () => {
+  test("includes AUTO-LINKED when topic overlaps exist", async () => {
     seedFragment("React hooks pattern for state management", null);
     const result = await handleMemoryAdd({
       fragment: "React hooks cleanup for useEffect",
       project: null,
     });
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes("memory_relate"));
+    assert.ok(result.content[0].text.includes("AUTO-LINKED"));
   });
 
   test("includes SUGGESTED ACTIONS for pattern type suggesting guide_distill", async () => {

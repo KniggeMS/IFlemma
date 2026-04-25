@@ -19,3 +19,5 @@ export {
   setGuidesDir,
   TASK_GUIDE_MAP
 } from "./core.js";
+
+export { seedGuides, getGuideSeedCount } from "./seed.js";

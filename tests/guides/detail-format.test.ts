@@ -38,6 +38,7 @@ function makeGuide(overrides: Partial<Guide> = {}): Guide {
     enables: [],
     superseded_by: null,
     deprecated: false,
+    auto_usage_count: 0,
     source_memories: [],
     validated_by: [],
     ...overrides,

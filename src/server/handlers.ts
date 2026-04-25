@@ -347,7 +347,20 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
     }
 
     if (sCtx.memoriesCreated.length > 0 && sCtx.memoriesAccessed.length > 0) {
-      reviewSuggestions.push(`New memories ${sCtx.memoriesCreated.map(m => `[${m}]`).join(", ")} and read memories ${sCtx.memoriesAccessed.map(m => `[${m}]`).join(", ")} share this session's context. Call memory_relate if any are connected (type: supports/supersedes/contradicts/related_to).`);
+      const allMemory = core.loadMemory();
+      let relateCount = 0;
+      for (const createdId of sCtx.memoriesCreated) {
+        if (relateCount >= 3) break;
+        const lastRead = sCtx.memoriesAccessed[sCtx.memoriesAccessed.length - 1];
+        if (createdId !== lastRead) {
+          core.addRelation(allMemory, createdId, lastRead, "related_to", "Auto-linked: same session");
+          relateCount++;
+        }
+      }
+      if (relateCount > 0) {
+        core.saveMemory(allMemory);
+        response += `\nAuto-linked ${relateCount} created memories to session context.`;
+      }
     }
     if (sCtx.memoriesCreated.length > 0) {
       reviewSuggestions.push(`If any created memories represent reusable skills, call guide_distill to promote them.`);
@@ -357,6 +370,16 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
       if (notPracticed.length > 0) {
         reviewSuggestions.push(`Guides used but not practiced: ${notPracticed.join(", ")}. Call guide_practice to track experience.`);
       }
+    }
+  }
+
+  const vs = virtualSession.getCurrentVirtualSession();
+  if (vs && vs.technologies_seen && vs.technologies_seen.size > 0) {
+    const techs = [...vs.technologies_seen];
+    response += `\nAuto-detected technologies: ${techs.join(", ")}`;
+    const matchedGuides = techs.filter(t => guides.findGuide(allGuides, t));
+    if (matchedGuides.length > 0) {
+      response += `\nAuto-tracked guides: ${matchedGuides.join(", ")}`;
     }
   }
 
@@ -458,17 +481,25 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     }
   }
 
+  let autoRelateCount = 0;
+  if (resultIds.size > 1) {
+    const idArray = [...resultIds];
+    const hub = idArray[0];
+    for (let i = 1; i < idArray.length && autoRelateCount < 3; i++) {
+      const success = core.addRelation(memory, hub, idArray[i], "related_to", "Auto-linked: co-read in same query");
+      if (success) autoRelateCount++;
+    }
+  }
+
   const scopeInfo = showAll ? "all projects" : currentProject || "global";
   const formatted = core.formatMemoryForLLM(results, scopeInfo);
-  logger.data("memory.json", "save", { reason: "boost_search_results", boosted_count: resultIds.size });
+  logger.data("memory.json", "save", { reason: "boost_search_results", boosted_count: resultIds.size, auto_relate_count: autoRelateCount });
   core.saveMemory(memory);
   notifyMemoryChange();
 
   let hookResponse = formatted;
-  if (resultIds.size > 1) {
-    hookResponse += buildHookBlock([
-      `You read ${resultIds.size} fragments together. If any are meaningfully connected, call memory_relate(sourceId, targetId, type).`,
-    ]);
+  if (autoRelateCount > 0) {
+    hookResponse += `\nAuto-linked ${autoRelateCount} co-read fragments with related_to relations.`;
   }
 
   logger.flow("memory_read", "complete_search", { query, results: (results as any[]).length, scope: scopeInfo });
@@ -525,6 +556,10 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   const newFragment = core.createFragment(finalFragment, source, title, project, description, fragmentType);
   logger.flow("memory_add", "fragment_created", { id: newFragment.id, title: newFragment.title });
 
+  if (fragmentType === "pattern" || fragmentType === "lesson") {
+    newFragment.distill_candidate = true;
+  }
+
   if (activeSessionId) {
     logger.data("sessions.json", "load");
     const allSessions = sessions.loadSessions();
@@ -549,25 +584,33 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
 
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
   let response = `Added fragment [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nSummary: ${newFragment.description}`;
+  if (newFragment.distill_candidate) {
+    response += `\nFlagged as distill candidate (type: ${fragmentType}).`;
+  }
   if (hasSecrets) {
     response += `\n\n⚠️ Privacy: ${found.length} potential secret(s) detected and auto-redacted: ${found.map(f => f.type).join(", ")}. Use confirm: true to store as-is.`;
   }
   if (overlaps.length > 0) {
-    response += `\n\n⚡ Potentially related memories:`;
-    for (const overlap of overlaps) {
-      response += `\n  [${overlap.id}] "${overlap.title}" (${overlap.confidence.toFixed(2)})`;
+    const strongest = overlaps[0];
+    core.addRelation(memory, newFragment.id, strongest.id, "related_to", `Auto-linked: topic overlap (${strongest.confidence.toFixed(2)})`);
+    core.saveMemory(memory);
+    notifyMemoryChange();
+    response += `\n\nRelated memories (auto-linked to strongest match):`;
+    response += `\n  [${strongest.id}] "${strongest.title}" (${strongest.confidence.toFixed(2)}) — AUTO-LINKED`;
+    for (let i = 1; i < overlaps.length; i++) {
+      response += `\n  [${overlaps[i].id}] "${overlaps[i].title}" (${overlaps[i].confidence.toFixed(2)})`;
     }
-    response += `\nConsider: Does this update or contradict existing knowledge? Use memory_update to refine or memory_merge to consolidate.`;
   }
 
   const hookSuggestions: string[] = [];
-  if (overlaps.length > 0) {
-    hookSuggestions.push(`Topic overlap with ${overlaps.map(o => `[${o.id}]`).join(", ")}. Call memory_relate if meaningful (type: supports/supersedes/contradicts/related_to).`);
-  }
   const sCtx = getSessionContext();
   const otherAccessed = sCtx.memoriesAccessed.filter(mid => mid !== newFragment.id);
   if (otherAccessed.length > 0) {
-    hookSuggestions.push(`You read ${otherAccessed.map(m => `[${m}]`).join(", ")} this session. If this new knowledge connects to any, call memory_relate.`);
+    const lastRead = otherAccessed[otherAccessed.length - 1];
+    core.addRelation(memory, newFragment.id, lastRead, "related_to", "Auto-linked: same session context");
+    core.saveMemory(memory);
+    notifyMemoryChange();
+    response += `\nAuto-linked to last read memory [${lastRead}] (same session context).`;
   }
   if (fragmentType === "pattern" || fragmentType === "lesson") {
     hookSuggestions.push(`This is a ${fragmentType}. Consider guide_distill to promote it into a reusable skill.`);
@@ -631,6 +674,9 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     logger.debug("memory_update updating_fragment", { id });
     memory[targetIndex].fragment = fragment;
     memory[targetIndex].accessed++;
+    memory[targetIndex].relations = (memory[targetIndex].relations || []).filter(
+      (rel: any) => memory.some((f: any) => f.id === rel.id)
+    );
   }
 
   if (confidence !== undefined) {
@@ -651,9 +697,7 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
 
   let updateResponse = `Updated fragment [${id}]: "${memory[targetIndex].title}"`;
   if (fragment !== undefined) {
-    updateResponse += buildHookBlock([
-      `Content changed for [${id}]. Relations may need updating. Call memory_relate if new content supports/contradicts/supersedes existing knowledge.`,
-    ]);
+    updateResponse += `\nOrphan relations cleaned up after content change.`;
   }
 
   logger.flow("memory_update", "complete", { id, title: memory[targetIndex].title });
@@ -740,9 +784,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_positive", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${memory[targetIndex].confidence.toFixed(2)}.` + buildHookBlock([
-        `If this knowledge represents a reusable skill, call guide_distill(memory_id="${id}", guide="...") to promote it.`,
-      ]) }],
+      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${memory[targetIndex].confidence.toFixed(2)}.` }],
     };
   } else {
     const penalized = core.recordNegativeHit(memory[targetIndex]);
@@ -753,9 +795,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_negative", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${memory[targetIndex].confidence.toFixed(2)}.` + buildHookBlock([
-        `If this knowledge is outdated or incorrect: memory_update(id="${id}") to correct, memory_forget(id="${id}") to remove, or memory_relate(type="contradicts") if a newer fragment supersedes it.`,
-      ]) }],
+      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${memory[targetIndex].confidence.toFixed(2)}.` }],
     };
   }
 }
@@ -1067,9 +1107,6 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
 
   const pCtx = getSessionContext();
   const hookSuggestions: string[] = [];
-  if (pCtx.memoriesAccessed.length > 0) {
-    hookSuggestions.push(`Memories read this session: ${pCtx.memoriesAccessed.map(m => `[${m}]`).join(", ")}. If any informed this guide, call guide_distill to promote them.`);
-  }
   const totalAttempts = (updated.success_count || 0) + (updated.failure_count || 0);
   if (totalAttempts >= 3 && (updated.success_count || 0) / totalAttempts < 0.4) {
     hookSuggestions.push(`Guide "${updated.guide}" success rate is ${((updated.success_count || 0) / totalAttempts).toFixed(2)} (${updated.success_count}/${totalAttempts}). Consider guide_update to refine.`);
@@ -1120,9 +1157,7 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
 
   logger.flow("guide_create", "complete", { guide: guideName, category, is_new: true });
   return {
-    content: [{ type: "text", text: `Created new guide "${newGuide.guide}" (${newGuide.category}) with a detailed manual.` + buildHookBlock([
-      `Start tracking with guide_practice when you use it. If existing memories informed this guide, call guide_distill to link them.`,
-    ]) }],
+    content: [{ type: "text", text: `Created new guide "${newGuide.guide}" (${newGuide.category}) with a detailed manual.` }],
   };
 }
 
@@ -1174,6 +1209,9 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
   if (!fragment.related_guides.includes(normalizedName)) {
     fragment.related_guides.push(normalizedName);
   }
+  if (fragment.distill_candidate) {
+    fragment.distill_candidate = false;
+  }
 
   core.saveMemory(allMemory);
   logger.data("guides.json", "save", { reason: "distill_memory_to_guide", memory_id: memoryId, guide: guideName });
@@ -1181,14 +1219,6 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
 
   let response = `Successfully distilled memory [${memoryId}] into guide "${updated.guide}" (${updated.category}).\n\n`;
   response += guides.formatGuideDetail(updated);
-
-  const distillOverlaps = core.findTopicOverlaps(allMemory, fragment.fragment, fragment.project, 3);
-  const distillHookSuggestions: string[] = [];
-  const relatedMemories = distillOverlaps.filter(o => o.id !== memoryId);
-  if (relatedMemories.length > 0) {
-    distillHookSuggestions.push(`Related memories that might also inform guide "${updated.guide}": ${relatedMemories.map(m => `[${m.id}] "${m.title}"`).join(", ")}. Consider guide_distill for these too.`);
-  }
-  response += buildHookBlock(distillHookSuggestions);
 
   logger.flow("guide_distill", "complete", { memory_id: memoryId, guide: guideName, category });
   return {

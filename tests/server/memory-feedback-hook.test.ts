@@ -33,27 +33,23 @@ function seedFragment(text: string): MemoryFragment {
 }
 
 describe("memory_feedback response hooks", () => {
-  test("positive feedback includes SUGGESTED ACTIONS mentioning guide_distill", async () => {
+  test("positive feedback records confidence boost", async () => {
     const frag = seedFragment("A useful programming tip about caching strategies");
     const result = await handleMemoryFeedback({
       id: frag.id,
       useful: true,
     });
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes("guide_distill"));
+    assert.ok(result.content[0].text.includes("Confidence boosted"));
   });
 
-  test("negative feedback includes SUGGESTED ACTIONS mentioning memory_update, memory_forget, and memory_relate", async () => {
+  test("negative feedback records confidence reduction", async () => {
     const frag = seedFragment("An outdated piece of information about old technology");
     const result = await handleMemoryFeedback({
       id: frag.id,
       useful: false,
     });
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes("memory_update"));
-    assert.ok(result.content[0].text.includes("memory_forget"));
-    assert.ok(result.content[0].text.includes("memory_relate"));
+    assert.ok(result.content[0].text.includes("Confidence reduced"));
   });
 });

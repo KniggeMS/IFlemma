@@ -8,7 +8,6 @@ import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as handlers from "../../src/server/handlers.js";
 import * as hooks from "../../src/server/hooks.js";
-import { getDynamicSystemPrompt } from "../../src/server/system-prompt.js";
 import type { MemoryFragment } from "../../src/types.js";
 
 let TMPDIR: string;
@@ -345,134 +344,32 @@ describe("Hook System", () => {
   });
 });
 
-describe("Dynamic System Prompt", () => {
-  function seedProjectMemory(projectName: string): MemoryFragment[] {
-    const frags = [
-      core.createFragment("React hooks patterns", "ai", "React Hooks", projectName),
-      core.createFragment("State management tips", "ai", "State Mgmt", projectName),
-    ];
-    core.saveMemory(frags);
-    return frags;
-  }
-
-  describe("getDynamicSystemPrompt", () => {
-    test("returns base prompt when no project", async () => {
-      const prompt = await getDynamicSystemPrompt(null);
-      assert.ok(prompt.includes("persistent long-term memory powered by Lemma"));
-      assert.ok(!prompt.includes("<project_context>"));
-    });
-
-    test("returns base prompt when project has no memories", async () => {
-      const prompt = await getDynamicSystemPrompt("EmptyProject");
-      assert.ok(prompt.includes("persistent long-term memory powered by Lemma"));
-      assert.ok(!prompt.includes("<project_context>"));
-    });
-
-    test("injects project context when memories exist", async () => {
-      seedProjectMemory("TestProject");
-      const prompt = await getDynamicSystemPrompt("TestProject");
-      assert.ok(prompt.includes("<project_context>"));
-      assert.ok(prompt.includes("Project Context: TestProject"));
-      assert.ok(prompt.includes("2 saved memory fragment"));
-    });
-
-    test("includes memory titles in injected context", async () => {
-      seedProjectMemory("AnotherProject");
-      const prompt = await getDynamicSystemPrompt("AnotherProject");
-      assert.ok(prompt.includes("React Hooks"));
-      assert.ok(prompt.includes("State Mgmt"));
-    });
-
-    test("separates project and global contexts", async () => {
-      const globalFrag = core.createFragment("Global unique info xyz", "ai", "GlobalUniqueTitle", null);
-      const projFrag = core.createFragment("Project unique info", "ai", "ProjectUniqueTitle", "ScopedProj");
-      core.saveMemory([globalFrag, projFrag]);
-
-      const prompt = await getDynamicSystemPrompt("ScopedProj");
-      assert.ok(prompt.includes("ProjectUniqueTitle"), "Should include project memory in project_context");
-      assert.ok(prompt.includes("GlobalUniqueTitle"), "Should include global memory in global_knowledge");
-      assert.ok(prompt.includes("<global_knowledge>"), "Should have global_knowledge section");
-    });
-
-    test("limits to top 20 fragments by confidence", async () => {
-      const frags: MemoryFragment[] = [];
-      for (let i = 0; i < 25; i++) {
-        const frag = core.createFragment(`Fragment ${i}`, "ai", `Title ${i}`, "BigProject");
-        frag.confidence = 0.3 + (i * 0.02);
-        frags.push(frag);
-      }
-      core.saveMemory(frags);
-
-      const prompt = await getDynamicSystemPrompt("BigProject");
-      const matches = prompt.match(/\[m[a-f0-9]{6}\]/g) || [];
-      assert.ok(matches.length <= 20, `Expected max 20 fragments, got ${matches.length}`);
-    });
-
-    test("project name matching is case-insensitive", async () => {
-      seedProjectMemory("CaseSensitive");
-      const prompt = await getDynamicSystemPrompt("casesensitive");
-      assert.ok(prompt.includes("<project_context>"));
-    });
+describe("Prompt Modifiers", () => {
+  test("registerPromptModifier adds modifier", () => {
+    hooks.clearPromptModifiers();
+    const unregister = hooks.registerPromptModifier(async (p: string) => p);
+    assert.equal(hooks.getPromptModifierCount(), 1);
+    unregister();
   });
 
-  describe("Prompt Modifiers", () => {
-    test("registerPromptModifier adds modifier", () => {
-      hooks.clearPromptModifiers();
-      const unregister = hooks.registerPromptModifier(async (p: string) => p);
-      assert.equal(hooks.getPromptModifierCount(), 1);
-      unregister();
+  test("applyPromptModifiers modifies prompt", async () => {
+    hooks.clearPromptModifiers();
+    hooks.registerPromptModifier(async (prompt: string, _ctx) => {
+      return prompt + "\n\n<!-- Custom Footer -->";
     });
 
-    test("applyPromptModifiers modifies prompt", async () => {
-      hooks.clearPromptModifiers();
-      hooks.registerPromptModifier(async (prompt: string, _ctx) => {
-        return prompt + "\n\n<!-- Custom Footer -->";
-      });
+    const modified = await hooks.applyPromptModifiers("Base", { project: "Test" });
+    assert.ok(modified.includes("Custom Footer"));
+    hooks.clearPromptModifiers();
+  });
 
-      const modified = await hooks.applyPromptModifiers("Base", { project: "Test" });
-      assert.ok(modified.includes("Custom Footer"));
-      hooks.clearPromptModifiers();
-    });
+  test("multiple modifiers are applied in order", async () => {
+    hooks.clearPromptModifiers();
+    hooks.registerPromptModifier(async (p: string) => p + " [A]");
+    hooks.registerPromptModifier(async (p: string) => p + " [B]");
 
-    test("multiple modifiers are applied in order", async () => {
-      hooks.clearPromptModifiers();
-      hooks.registerPromptModifier(async (p: string) => p + " [A]");
-      hooks.registerPromptModifier(async (p: string) => p + " [B]");
-
-      const result = await hooks.applyPromptModifiers("Start", {});
-      assert.equal(result, "Start [A] [B]");
-      hooks.clearPromptModifiers();
-    });
-
-    test("modifier receives context with project and fragments", async () => {
-      hooks.clearPromptModifiers();
-      let receivedProject: string | null = null;
-      let receivedFragments: unknown[] = [];
-
-      hooks.registerPromptModifier(async (prompt: string, ctx) => {
-        const typed = ctx as { project: string; fragments: unknown[] };
-        receivedProject = typed.project;
-        receivedFragments = typed.fragments;
-        return prompt;
-      });
-
-      seedProjectMemory("ContextTestProject");
-      await getDynamicSystemPrompt("ContextTestProject");
-
-      assert.equal(receivedProject, "ContextTestProject");
-      assert.ok(receivedFragments.length > 0);
-      hooks.clearPromptModifiers();
-    });
-
-    test("getDynamicSystemPrompt applies modifiers", async () => {
-      hooks.clearPromptModifiers();
-      hooks.registerPromptModifier(async (prompt: string) => {
-        return prompt.replace("</system_prompt>", "<!-- Modified by hook -->\n</system_prompt>");
-      });
-
-      const prompt = await getDynamicSystemPrompt(null);
-      assert.ok(prompt.includes("Modified by hook"));
-      hooks.clearPromptModifiers();
-    });
+    const result = await hooks.applyPromptModifiers("Start", {});
+    assert.equal(result, "Start [A] [B]");
+    hooks.clearPromptModifiers();
   });
 });

@@ -77,15 +77,15 @@ describe("guide_distill bidirectional links", () => {
     assert.equal(count, 1);
   });
 
-  test("response includes SUGGESTED ACTIONS when related memories exist", async () => {
+  test("response confirms distillation with related memories present", async () => {
     const frag1 = core.createFragment("React hooks should use useCallback for memoization", "ai", null, null);
     const frag2 = core.createFragment("React useCallback memoization pattern for performance", "ai", null, null);
     core.saveMemory([frag1, frag2]);
     const result = await handleGuideDistill({ memory_id: frag1.id, guide: "react" });
 
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes(frag2.id));
+    assert.ok(result.content[0].text.includes("Successfully distilled"));
+    assert.ok(result.content[0].text.includes(frag1.id));
   });
 
   test("response does NOT include SUGGESTED ACTIONS when no related memories", async () => {

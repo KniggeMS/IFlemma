@@ -7,76 +7,70 @@ interface SeedEntry {
   id: string;
   title: string;
   description: string;
+  type: MemoryFragment["type"];
   fragment: string;
 }
 
 const SEEDS: SeedEntry[] = [
   {
     id: "seed_task_complexity",
-    title: "Task Complexity Assessment — Simple vs Complex Workflow",
-    description: "Evaluate complexity before acting. Simple tasks: execute directly. Complex tasks: mandatory plan → evaluate → execute step-by-step.",
+    title: "Task Complexity Assessment",
+    description: "Evaluate complexity before acting. Simple: execute directly. Complex: plan → evaluate → execute.",
+    type: "pattern",
     fragment: `## Task Complexity Assessment
 
-Before starting any task, evaluate its complexity:
+### Context
+Every task has a complexity level that determines the required workflow. Choosing the wrong workflow wastes time or introduces risk.
 
-### Simple Tasks (single-step resolution)
+### Pattern
+
+**Simple Tasks** (single-step, single-file, certainty):
 - Small change in a single file
 - Questions requiring short answers
 - Single function add/fix
 - Simple search/lookup
 
-**Approach:** Execute directly. No planning needed.
+→ Execute directly. No planning needed.
 
-### Complex Tasks (multi-step, multi-file, uncertainty)
+**Complex Tasks** (multi-step, multi-file, uncertainty):
 - Refactoring across multiple files
 - New feature involving multiple components
 - Debugging with unclear root cause
 - Architectural decisions
 - Cross-file dependencies
 
-**Approach — Mandatory 3-Phase Process:**
+→ Mandatory 3-Phase Process:
+1. **PLAN:** Break into subtasks, define each step, identify dependencies, flag risks
+2. **EVALUATE:** Review plan for missing steps, side-effect analysis, cross-file consistency
+3. **EXECUTE:** Follow plan in order, verify after each step, update plan on failure
 
-**1. PLAN:**
-- Break the request into subtasks
-- Define each step clearly
-- Identify file and component dependencies
-- Flag risky points and unknowns
-
-**2. EVALUATE:**
-- Review the plan: any missing steps?
-- Side-effect analysis: what else does this change affect?
-- Cross-file consistency check
-- Revise plan if needed
-
-**3. EXECUTE STEP-BY-STEP:**
-- Follow the plan in order
-- Verify after each step
-- On failure: go back and update the plan
-- Final verification after all steps complete
-
-### Rule
-NEVER start writing code directly on complex tasks. Present the plan first, then execute it faithfully.`,
+### Rules
+- NEVER start writing code directly on complex tasks — present the plan first
+- When unsure, treat as complex — the overhead of planning is always less than the cost of rework
+- A task that touches >2 files is complex by definition`,
   },
   {
     id: "seed_prompt_engineering",
-    title: "Prompt Engineering — System Prompt & Agent Design Principles",
-    description: "Principles for writing system prompts and creating parallel agents. Claude + OpenAI best practices synthesis.",
+    title: "Prompt Engineering Principles",
+    description: "System prompt structure, XML tag usage, anti-hallucination, parallel agent design, verbosity control.",
+    type: "fact",
     fragment: `## Prompt Engineering Principles
 
-### Prompt Structure (4-Section Template)
-Every prompt should follow this order:
+### Context
+Prompt structure directly affects LLM output quality. Small structural changes produce disproportionate quality differences.
 
-1. **IDENTITY** — Who, what they do, domain expertise, scoring/output scale
+### 4-Section Prompt Template
+1. **IDENTITY** — Who, domain expertise, scoring/output scale
 2. **INSTRUCTIONS** — Rules, output format, coverage directive, grounding rule
 3. **EXAMPLES** — 1-2 input/output pairs (more effective than negative instructions)
 4. **CONTEXT** — Data, additional information
 
 ### XML Tag Usage
-- Use semantic XML tags for section separation: \`<identity>\`, \`<instructions>\`, \`<examples>\`
-- Claude is specifically fine-tuned to prioritize content within XML tags
+- Semantic XML tags for section separation: \`<identity>\`, \`<instructions>\`, \`<examples>\`
+- Claude is fine-tuned to prioritize content within XML tags
 - OpenAI also recommends markdown + XML combination
 
-### Anti-Hallucination Rules
+### Anti-Hallucination
 - Add "Base your analysis ONLY on the provided data" instruction
 - Require confidence score (0.0-1.0) on every output
 - Evidence field: require direct quotes from source data
@@ -85,25 +79,28 @@ Every prompt should follow this order:
 
 ### Parallel Agent Rules
 - Every agent prompt must be fully self-contained (no cross-dependencies)
-- Fan-out: Launch multiple agents simultaneously for independent tasks (Promise.all)
+- Fan-out: Launch multiple agents simultaneously for independent tasks
 - Generation pass and scoring/evaluation pass must be separate phases
-- One agent's instructions do not generalize to another — each works in its own scope
 - Do not spawn a subagent for work completable in a single response
 
 ### Verbosity Control
-- Positive examples > negative instructions (show "do this" instead of "don't do that")
+- Positive examples > negative instructions (show "do this" not "don't do that")
 - Calibrate verbosity to complexity — short answers for simple questions
 - No over-formatting: avoid unnecessary bold, headers, lists`,
   },
   {
     id: "seed_clean_code_modern",
-    title: "Modern Clean Code — Agentic Era Practices",
-    description: "Updated clean code principles for AI-assisted development. SRP, LOB, type safety, naming conventions.",
+    title: "Modern Clean Code (Agentic Era)",
+    description: "Updated clean code for AI-assisted dev. SRP as context isolation, pragmatic DRY, LOB, type safety.",
+    type: "fact",
     fragment: `## Modern Clean Code (Agentic Era)
+
+### Context
+AI-assisted development changes which code quality principles matter most. Traditional clean code advice must be updated for agentic workflows.
 
 ### Architectural Principles
 - **SRP as Context Isolation:** Modules must stay within 4k-10k token windows for AI reasoning accuracy
-- **Pragmatic DRY:** A little repetition is preferred over complex, deep-dependency abstractions that confuse AI agents
+- **Pragmatic DRY:** A little repetition > complex deep-dependency abstractions that confuse AI agents
 - **Locality of Behavior (LOB):** Feature-grouping over role-grouping for faster context retrieval
 - **Naming as Metadata:** Explicit, unambiguous naming is the primary signal for AI logic correlation
 
@@ -121,8 +118,7 @@ Every prompt should follow this order:
 ### AI-Assisted Development Caveats
 - AI-generated code produces 48% more duplicate blocks — be intentional
 - Code churn increases from 3.1% to 5.7% with AI adoption — don't neglect refactoring
-- "Moved" lines dropped from 24.1% to 9.5% — AI tends to copy-paste instead of refactor
-- Always check cross-file impact after every AI-suggested change`,
+- AI tends to copy-paste instead of refactor — always check cross-file impact`,
   },
 ];
 
@@ -163,7 +159,7 @@ export function seedMemory(memory: MemoryFragment[]): { seeded: number; skipped:
       positive_feedback: 0,
       negative_feedback: 0,
       last_refined: null,
-      type: "fact",
+      type: seed.type,
       related_guides: [],
     };
 

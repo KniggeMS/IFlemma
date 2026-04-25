@@ -52,6 +52,7 @@ export function createGuide(
     learnings: learnings.map(l => l.trim()).filter(Boolean),
     success_count: 0,
     failure_count: 0,
+    auto_usage_count: 0,
     anti_patterns: [],
     known_pitfalls: [],
     last_refined: null,
@@ -273,6 +274,7 @@ export function practiceGuide(
 
   guide.usage_count += 1;
   guide.last_used = getToday();
+  if (guide.auto_usage_count == null) guide.auto_usage_count = 0;
   logger.flow("guide_practice", "updated", { guide: guideName, usageCount: guide.usage_count });
 
   if (!guide.description && description) {
@@ -309,7 +311,11 @@ export function practiceGuide(
 
 export function getTopGuides(guides: Guide[], limit: number = 20): Guide[] {
   return [...guides]
-    .sort((a, b) => b.usage_count - a.usage_count)
+    .sort((a, b) => {
+      const scoreA = (a.usage_count || 0) * 0.7 + (a.auto_usage_count || 0) * 0.3;
+      const scoreB = (b.usage_count || 0) * 0.7 + (b.auto_usage_count || 0) * 0.3;
+      return scoreB - scoreA;
+    })
     .slice(0, limit);
 }
 

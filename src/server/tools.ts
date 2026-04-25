@@ -114,7 +114,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "memory_add",
-    description: "MANDATORY: Call this AFTER completing analysis/research to save findings. Synthesize information into short, reusable fragments.",
+    description:
+      "MANDATORY: Call this AFTER completing analysis/research to save findings. Synthesize information into short, reusable fragments.\n\nFRAGMENT SCHEMA — always follow this structure:\n## [Topic Title]\n\n### Context\n[1-2 sentences: what and why it matters]\n\n### [Content Section]\n- [Key fact 1]\n- [Key fact 2]\n\n### Rules (optional, for patterns/warnings)\n- [Absolute constraint]\n\nRULES:\n- Title: max 80 chars, start with topic name\n- Fragment: 30-2000 chars, structured markdown, NOT plain prose\n- Every fragment MUST have a ## heading and at least one ### section\n- Type: Choose based on nature:\n  * fact = technical info, API behavior, version details\n  * pattern = repeated solution, best practice, code pattern\n  * lesson = learned from experience, mistake, debugging insight\n  * warning = caution, gotcha, pitfall to avoid\n  * context = environment info, project setup, dependencies\n- Auto-title: If you omit title, first 40 chars of fragment used\n- Auto-description: First sentence extracted from fragment",
     inputSchema: {
       type: "object",
       properties: {
@@ -242,7 +243,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "memory_relate",
-    description: "Create a typed relation between two memory fragments. Types: 'contradicts' (opposing claims), 'supersedes' (replaces), 'supports' (reinforces), 'related_to' (general connection).",
+    description:
+      "Create a typed relation between two memory fragments. Bidirectional — reverse relation auto-created.\n\nRELATION TYPES — when to use each:\n- supports: Fragment A reinforces/validates Fragment B\n- contradicts: Fragment A contradicts/invalidates Fragment B\n- supersedes: Fragment A is newer and replaces Fragment B\n- related_to: General connection between fragments\n\nWHEN TO CALL:\n- After memory_add if you know this relates to an existing fragment\n- After memory_update if content changed significantly\n- After discovering two fragments are connected during analysis",
     inputSchema: {
       type: "object",
       properties: {
@@ -311,7 +313,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "guide_practice",
-    description: "MANDATORY: Record guide usage - increments usage count, updates last_used date, and adds contexts/learnings. Call this when you use a guide during work. Both contexts and learnings are REQUIRED.",
+    description:
+      "MANDATORY: Record guide usage - increments usage count, updates last_used date, and adds contexts/learnings. Call this when you use a guide during work.\n\nTEMPLATE:\n- guide: technology/method name (e.g., \"react\", \"git\", \"seo\")\n- category: web-frontend | web-backend | dev-tool | programming-language | data-storage | ...\n- contexts: WHERE you used it (e.g., [\"hooks\", \"state\", \"effects\"])\n- learnings: WHAT you discovered (e.g., [\"useCallback prevents re-renders\"])\n\nIf guide doesn't exist, it will be auto-created.\nCall this AFTER applying knowledge from a guide or memory fragment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -362,7 +365,7 @@ export const TOOLS: ToolDefinition[] = [
         },
         description: {
           type: "string",
-          description: "The full manual, protocols, mission, and templates for this guide.",
+          description: "The full manual for this guide. Follow this schema:\n\n## [Name] — [Subtitle]\n\n### Mission\n[Single sentence: what to achieve]\n\n### Protocol\n1. **[STEP]:** [action and expected outcome]\n2. **[STEP]:** [action and expected outcome]\n...\n\n### [Optional Section]\n[Relevant tables, templates, or reference data]\n\n### Rules\n- [Absolute rule 1]\n- [Absolute rule 2]\n- [Absolute rule 3]",
         },
         contexts: {
           type: "array",
@@ -380,7 +383,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "guide_distill",
-    description: "Transform a memory fragment (static fact) into a guide's learning (procedural knowledge). Use this when a learned piece of information should become part of a permanent capability.",
+    description:
+      "Transform a memory fragment (static fact) into a guide's learning (procedural knowledge). Use this when a learned piece of information should become part of a permanent capability.\n\nWHEN TO CALL: After memory_add with type=\"pattern\" or type=\"lesson\". These fragment types represent reusable knowledge that should be promoted to a guide.\n\nTEMPLATE:\n- memory_id: The fragment ID to distill (e.g., \"m2a5d0cde45ce\")\n- guide: Target guide name — use technology name (e.g., \"react\", \"git\")\n- category: Required only if creating a new guide\n\nThe memory and guide will be bidirectionally linked automatically.",
     inputSchema: {
       type: "object",
       properties: {

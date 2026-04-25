@@ -33,15 +33,14 @@ function seedFragment(text: string): MemoryFragment {
 }
 
 describe("memory_update response hooks", () => {
-  test("includes SUGGESTED ACTIONS about relations when fragment content is updated", async () => {
+  test("includes orphan cleanup message when fragment content is updated", async () => {
     const frag = seedFragment("Original content about something important");
     const result = await handleMemoryUpdate({
       id: frag.id,
       fragment: "Updated content about something different and new",
     });
     assert.ok(!result.isError);
-    assert.ok(result.content[0].text.includes("SUGGESTED ACTIONS"));
-    assert.ok(result.content[0].text.includes("memory_relate"));
+    assert.ok(result.content[0].text.includes("Orphan relations cleaned up"));
   });
 
   test("does NOT include SUGGESTED ACTIONS when only title is updated", async () => {

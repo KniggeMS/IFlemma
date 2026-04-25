@@ -13,12 +13,13 @@ import * as guides from "../guides/index.js";
 import * as virtualSession from "../sessions/virtual.js";
 import { BASE_SYSTEM_PROMPT } from "./system-prompt.js";
 import { TOOLS } from "./tools.js";
-import type { ToolDefinition } from "./tools.js";
 import { handleCallTool } from "./handlers.js";
 import { triggerHook, HookTypes } from "./hooks.js";
 import * as core_config from "../memory/config.js";
 import { setNotifyChange } from "./handlers.js";
 import { logger, initLogger } from "../logger.js";
+import * as traffic from "./traffic-log.js";
+import * as agentsMd from "./agents-md.js";
 
 export let detectedProject: string | null = null;
 
@@ -48,227 +49,8 @@ export function getServer(): Server {
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: buildToolsWithMemory() };
+  return { tools: TOOLS };
 });
-
-export function buildToolsWithMemory(): ToolDefinition[] {
-  const tools: ToolDefinition[] = TOOLS.map(t => ({ ...t }));
-  const memoryIdx = tools.findIndex(t => t.name === "memory_read");
-  if (memoryIdx === -1) return tools;
-
-  logger.flow("build_tools", "entry", { project: detectedProject });
-
-  const config = core_config.loadConfig();
-  logger.flow("build_tools", "config_loaded", {
-    token_budget: config.token_budget.full_content || 3000,
-    max_fragments: config.injection.max_full_content_fragments || 15,
-    max_guides: config.injection.max_guides || 20,
-  });
-
-  const memory: any[] = core.loadMemory();
-  const projectName = detectedProject;
-
-  const allSorted = projectName
-    ? (core.filterByProject(memory, projectName) as any[]).sort((a: any, b: any) => b.confidence - a.confidence)
-    : (core.filterByProject(memory, null) as any[]).sort((a: any, b: any) => b.confidence - a.confidence);
-
-  logger.flow("build_tools", "memory_loaded", {
-    total_fragments: memory.length,
-    filtered_count: allSorted.length,
-    project: projectName,
-  });
-
-  let contextBlock = "";
-  let tokensUsed = 0;
-  const budget = config.token_budget.full_content || 3000;
-  const maxFrags = config.injection.max_full_content_fragments || 15;
-  let count = 0;
-  const injectedIds = new Set<string>();
-
-  if (allSorted.length > 0) {
-    contextBlock += `\n\nYOUR MEMORIES (you already know these — no need to call memory_read for them):\n`;
-
-    for (const frag of allSorted) {
-      if (count >= maxFrags) break;
-      const entry = `---\n[${frag.id}] ${frag.title} (${(frag.confidence * 100).toFixed(0)}%)\n${frag.fragment}\n`;
-      const cost = core_config.estimateTokens(entry);
-      if (tokensUsed + cost > budget) break;
-
-      contextBlock += entry;
-      tokensUsed += cost;
-      count++;
-      injectedIds.add(frag.id);
-    }
-
-    logger.flow("build_tools", "injection_loop", {
-      fragments_injected: count,
-      tokens_used: tokensUsed,
-      budget,
-    });
-
-    const remaining = allSorted.filter((f: any) => !injectedIds.has(f.id)).slice(0, config.injection.max_summary_fragments || 30);
-    if (remaining.length > 0) {
-      contextBlock += `---\nADDITIONAL (call memory_read for details):\n`;
-      for (const frag of remaining) {
-        const scope = frag.project ? `[${frag.project}]` : "[global]";
-        contextBlock += `[${frag.id}] ${scope} ${frag.title}\n`;
-      }
-    }
-
-    logger.flow("build_tools", "summary_index", {
-      remaining_count: remaining.length,
-    });
-  }
-
-  const allGuides: any[] = guides.loadGuides();
-  const topGuides = guides.getTopGuides(allGuides, config.injection.max_guides || 20);
-  if (topGuides.length > 0) {
-    contextBlock += `\nACTIVE GUIDES:\n`;
-    for (const g of topGuides) {
-      const learnings = (g.learnings || []).slice(0, 3).join("; ");
-      contextBlock += `- ${g.guide} (${g.category}, ${g.usage_count}x)${learnings ? ": " + learnings : ""}\n`;
-    }
-  }
-
-  logger.flow("build_tools", "guides_injected", {
-    guide_count: topGuides.length,
-    top_guides: topGuides.slice(0, 5).map((g: any) => g.guide),
-  });
-
-  if (contextBlock) {
-    tools[memoryIdx] = {
-      ...tools[memoryIdx]!,
-      description: tools[memoryIdx]!.description + contextBlock,
-    };
-  }
-
-  logger.inject("tool_description", tokensUsed, count, {
-    total_guides: topGuides.length,
-  });
-
-  return tools;
-}
-
-export function buildDynamicInstructions(projectName: string | null): string {
-  logger.flow("build_instructions", "entry", { project: projectName });
-
-  const config = core_config.loadConfig();
-  const memory: any[] = core.loadMemory();
-
-  const allSorted = projectName
-    ? (core.filterByProject(memory, projectName) as any[])
-        .sort((a: any, b: any) => b.confidence - a.confidence)
-    : (core.filterByProject(memory, null) as any[])
-        .sort((a: any, b: any) => b.confidence - a.confidence);
-
-  const allGuides: any[] = guides.loadGuides();
-  const topGuides = guides.getTopGuides(allGuides, config.injection.max_guides);
-
-  let instructions = "";
-
-  const fullBudget = config.token_budget.full_content;
-  let tokensUsed = 0;
-  const fullContentIds = new Set<string>();
-
-  const fullContentParts: string[] = [];
-  for (const frag of allSorted) {
-    const entryText = `### [${frag.id}] ${frag.title} (${(frag.confidence * 100).toFixed(0)}%)\n${frag.fragment}\n`;
-    const cost = core_config.estimateTokens(entryText);
-    if (tokensUsed + cost > fullBudget) break;
-    if (fullContentParts.length >= config.injection.max_full_content_fragments) break;
-
-    fullContentParts.push(entryText);
-    tokensUsed += cost;
-    fullContentIds.add(frag.id);
-  }
-
-  logger.flow("build_instructions", "full_content", {
-    fragments: fullContentParts.length,
-    tokens: tokensUsed,
-  });
-
-  if (fullContentParts.length > 0) {
-    instructions += `## What You Already Know (no need to call memory_read for these)\n\n`;
-    for (const part of fullContentParts) {
-      instructions += part + "\n";
-    }
-  }
-
-  const remaining = allSorted.filter((f: any) => !fullContentIds.has(f.id));
-  const maxSummary = config.injection.max_summary_fragments;
-
-  if (remaining.length > 0) {
-    instructions += `## Additional Memory Index (call \`memory_read id="<id>"\` for details)\n\n`;
-    const toShow = remaining.slice(0, maxSummary);
-    for (const frag of toShow) {
-      const scope = frag.project ? `[${frag.project}]` : "[global]";
-      const desc = (frag.description || "").replace(/\n/g, " ").slice(0, 80);
-      instructions += `- [${frag.id}] ${scope} ${frag.title}${desc ? " — " + desc : ""}\n`;
-    }
-    if (remaining.length > maxSummary) {
-      instructions += `- ... and ${remaining.length - maxSummary} more (use \`memory_read\` to browse)\n`;
-    }
-    instructions += "\n";
-  }
-
-  logger.flow("build_instructions", "summary_index", {
-    remaining_count: remaining.length,
-  });
-
-  if (topGuides.length > 0) {
-    const maxDetail = config.injection.max_guide_detail;
-    const guideBudget = config.token_budget.guides_detail;
-
-    instructions += `## Guides (accumulated experience)\n\n`;
-
-    let guideTokens = 0;
-    let detailCount = 0;
-    let compactCount = 0;
-    for (const guide of topGuides) {
-      if (detailCount < maxDetail && guide.description && guide.description.length > 20) {
-        const entry = `### ${guide.guide} (${guide.category}) — ${guide.usage_count}x used\n`;
-        const desc = guide.description.length > 300 ? guide.description.slice(0, 300) + "..." : guide.description;
-        const fullEntry = entry + desc + "\n\n";
-        const cost = core_config.estimateTokens(fullEntry);
-
-        if (guideTokens + cost <= guideBudget) {
-          instructions += fullEntry;
-          guideTokens += cost;
-          detailCount++;
-          continue;
-        }
-      }
-
-      instructions += `- ${guide.guide} (${guide.category}) — ${guide.usage_count}x used\n`;
-      compactCount++;
-    }
-    instructions += `\nUse \`guide_get guide="<name>"\` for full guide details.\n\n`;
-
-    logger.flow("build_instructions", "guides", {
-      detailed: detailCount,
-      compact: compactCount,
-      guide_tokens: guideTokens,
-    });
-  }
-
-  if (projectName) {
-    instructions = `# Lemma — Your Memory (project: ${projectName})\n\n` + instructions;
-  } else {
-    instructions = `# Lemma — Your Memory\n\n` + instructions;
-  }
-
-  if (fullContentParts.length === 0 && remaining.length === 0) {
-    instructions += `No memories stored yet. Start working and call \`memory_add\` to build your memory.\n`;
-  }
-
-  instructions += `\n**RULE:** Call \`memory_add\` AFTER learning something new. If you skip this, the knowledge is lost forever — you will NOT remember it next session.`;
-
-  logger.flow("build_instructions", "complete", {
-    instruction_length: instructions.length,
-  });
-
-  return instructions;
-}
 
 server.setRequestHandler(InitializeRequestSchema, async (_request) => {
   logger.request("initialize");
@@ -281,10 +63,7 @@ server.setRequestHandler(InitializeRequestSchema, async (_request) => {
     console.error(`[Lemma] Detected project: ${detectedProject}`);
   }
 
-  const instructions = buildDynamicInstructions(detectedProject);
-
   logger.response("initialize", false, 0, {
-    instruction_length: instructions.length,
     project: detectedProject,
   });
 
@@ -302,7 +81,6 @@ server.setRequestHandler(InitializeRequestSchema, async (_request) => {
       name: "lemma",
       version: "1.0.0",
     },
-    instructions,
   };
 });
 
@@ -312,12 +90,6 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
       uri: "lemma://system-prompt",
       name: "Lemma System Prompt",
       description: "System prompt for LLM clients using Lemma memory",
-      mimeType: "text/markdown",
-    },
-    {
-      uri: "lemma://context/current",
-      name: "Lemma Current Context",
-      description: "Dynamically generated context with current memories and guides",
       mimeType: "text/markdown",
     },
   ];
@@ -340,20 +112,6 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           uri,
           mimeType: "text/markdown",
           text: BASE_SYSTEM_PROMPT,
-        },
-      ],
-    };
-  }
-
-  if (uri === "lemma://context/current") {
-    logger.flow("resources/read", "context/current", { uri });
-    const contextStr = buildDynamicInstructions(detectedProject);
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: "text/markdown",
-          text: contextStr,
         },
       ],
     };
@@ -461,10 +219,18 @@ async function initializeContext(): Promise<void> {
   virtualSession.setVirtualSessionConfig(cfg.virtual_session);
   logger.flow("initialize_context", "virtual_session_config_set");
 
-  const seedResult = core.seedMemory(core.loadMemory());
+  const memory = core.loadMemory();
+  const seedResult = core.seedMemory(memory);
   if (seedResult.seeded > 0) {
-    core.saveMemory(core.loadMemory());
+    core.saveMemory(memory);
     logger.flow("initialize_context", "seeded", seedResult);
+  }
+
+  const allGuidesForSeed = guides.loadGuides();
+  const guideSeedResult = guides.seedGuides(allGuidesForSeed);
+  if (guideSeedResult.seeded > 0) {
+    guides.saveGuides(allGuidesForSeed);
+    logger.flow("initialize_context", "guide_seeded", guideSeedResult);
   }
 
   const migrated = core.migrateConfidenceFloor();
@@ -491,6 +257,18 @@ async function initializeContext(): Promise<void> {
     } else {
       logger.info(`No saved memories for this project yet`);
     }
+
+    const projectDir = process.cwd();
+    if (projectDir) {
+      try {
+        const result = agentsMd.injectAgentsMd(projectDir);
+        if (result.injected) {
+          logger.info(`AGENTS.md ${result.created ? "created" : "injected"}: ${result.path}`);
+        }
+      } catch (e) {
+        logger.warn("Failed to inject AGENTS.md", (e as Error).message);
+      }
+    }
   } else {
     logger.info(`No project detected (running in global context)`);
   }
@@ -505,6 +283,40 @@ async function initializeContext(): Promise<void> {
 
 export async function startServer(): Promise<void> {
   logger.flow("server", "starting");
+  traffic.initTrafficLogger();
+
+  let incomingBuffer = "";
+
+  process.stdin.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    incomingBuffer += text;
+    const lines = incomingBuffer.split("\n");
+    incomingBuffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        traffic.logIncoming(parsed);
+      } catch {}
+    }
+  });
+
+  const origStdoutWrite = process.stdout.write;
+
+  (process.stdout as any).write = function (data: unknown, ...args: unknown[]): boolean {
+    if (typeof data === "string") {
+      const trimmed = data.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          traffic.logOutgoing(parsed);
+        } catch {}
+      }
+    }
+    return (origStdoutWrite as any).apply(process.stdout, [data, ...args]);
+  };
+
   await initializeContext();
 
   logger.flow("server", "creating_transport");
@@ -523,15 +335,6 @@ export async function startServer(): Promise<void> {
         logger.notify("notifications/tools/list_changed", "sending");
       }).catch((e) => {
         logger.notify("notifications/tools/list_changed", "failed", (e as Error).message);
-      });
-      logger.notify("notifications/resources/updated", "debounced");
-      server.notification({
-        method: "notifications/resources/updated",
-        params: { uri: "lemma://context/current" },
-      }).then(() => {
-        logger.notify("notifications/resources/updated", "sending");
-      }).catch((e) => {
-        logger.notify("notifications/resources/updated", "failed", (e as Error).message);
       });
     }, 100);
   });

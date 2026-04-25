@@ -97,7 +97,7 @@ describe("session_end review hook", () => {
     assert.ok(text.includes("Memories created"));
   });
 
-  test("SUGGESTED ACTIONS includes memory_relate suggestion when both read and created", async () => {
+  test("includes Auto-linked when both read and created memories exist", async () => {
     const frag = seedFragment("Important note about TypeScript generics and type inference");
     await handleSessionStart({ task_type: "debugging" });
     const readResult = await handleMemoryRead({ id: frag.id });
@@ -114,8 +114,7 @@ describe("session_end review hook", () => {
 
     const result = await handleSessionEnd({ outcome: "success" });
     const text = getText(result);
-    assert.ok(text.includes("SUGGESTED ACTIONS"));
-    assert.ok(text.includes("memory_relate"));
+    assert.ok(text.includes("Auto-linked"));
   });
 
   test("SUGGESTED ACTIONS includes guide_distill suggestion when memories created", async () => {

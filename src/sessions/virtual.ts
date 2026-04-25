@@ -2,6 +2,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import { logger } from "../logger.js";
+import * as guides from "../guides/index.js";
 import type { VirtualSession, ToolCallEntry } from "../types.js";
 
 interface FinalizedVirtualSession {
@@ -72,6 +73,11 @@ export function recordToolCall(toolName: string, args: any, result: any): Virtua
   logger.flow("virtual_session", "recorded", { tool: toolName, entryCount: currentVirtualSession.tool_calls.length });
 
   extractSessionData(toolName, args, result, currentVirtualSession);
+
+  const detectedTechs = detectTechnologies(toolName, args);
+  for (const tech of detectedTechs) {
+    currentVirtualSession.technologies_seen.add(tech);
+  }
 
   resetTimeout();
 
@@ -160,6 +166,25 @@ export function finalizeVirtualSession(): FinalizedVirtualSession | null {
     logger.error("Failed to write virtual session file:", { error: error.message, id: session.id });
   }
 
+  try {
+    const allGuides = guides.loadGuides();
+    let autoTracked = 0;
+    for (const tech of session.technologies || []) {
+      const guide = guides.findGuide(allGuides, tech);
+      if (guide) {
+        guide.auto_usage_count = (guide.auto_usage_count || 0) + 1;
+        guide.last_used = new Date().toISOString();
+        autoTracked++;
+      }
+    }
+    if (autoTracked > 0) {
+      guides.saveGuides(allGuides);
+      logger.flow("virtual_session", "auto_practice", { count: autoTracked });
+    }
+  } catch (error) {
+    logger.error("Auto-practice failed", (error as Error).message);
+  }
+
   currentVirtualSession = null;
   if (sessionTimeout) {
     clearTimeout(sessionTimeout);
@@ -192,4 +217,49 @@ export function getRecentSessions(count: number = 10): FinalizedVirtualSession[]
   } catch {
     return [];
   }
+}
+
+export function detectTechnologies(tool: string, args: any): string[] {
+  const techs: string[] = [];
+
+  if (args?.contexts) {
+    for (const c of args.contexts) techs.push(String(c).toLowerCase());
+  }
+  if (args?.technologies) {
+    for (const t of args.technologies) techs.push(String(t).toLowerCase());
+  }
+
+  const text = [args?.fragment, args?.query, args?.description, args?.guide]
+    .filter(Boolean)
+    .join(" ");
+
+  if (text) {
+    const patterns: [string, RegExp][] = [
+      ["react", /\breact\b/i],
+      ["vue", /\bvue\b/i],
+      ["angular", /\bangular\b/i],
+      ["nextjs", /\bnext\.?js\b/i],
+      ["sveltekit", /\bsveltekit\b/i],
+      ["svelte", /\bsvelte\b/i],
+      ["typescript", /\btypescript\b/i],
+      ["python", /\bpython\b/i],
+      ["nodejs", /\bnode\.?js\b|\bexpress\b/i],
+      ["prisma", /\bprisma\b/i],
+      ["supabase", /\bsupabase\b/i],
+      ["docker", /\bdocker\b/i],
+      ["jest", /\bjest\b/i],
+      ["vitest", /\bvitest\b/i],
+      ["seo", /\bseo\b|\bsitemap\b/i],
+      ["git", /\bgit\b(?!hub)/i],
+      ["astro", /\bastro\b/i],
+      ["remix", /\bremix\b/i],
+      ["hugo", /\bhugo\b/i],
+    ];
+
+    for (const [tech, pattern] of patterns) {
+      if (pattern.test(text)) techs.push(tech);
+    }
+  }
+
+  return [...new Set(techs)];
 }

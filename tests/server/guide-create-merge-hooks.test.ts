@@ -38,7 +38,7 @@ function seedGuide(name: string, category: string, overrides: Record<string, unk
 }
 
 describe("guide_create response hooks", () => {
-  test("new guide creation response includes SUGGESTED ACTIONS mentioning guide_practice and guide_distill", async () => {
+  test("new guide creation response confirms guide was created", async () => {
     const result = await handleGuideCreate({
       guide: "my-new-guide",
       category: "dev-tool",
@@ -47,9 +47,9 @@ describe("guide_create response hooks", () => {
 
     assert.ok(!result.isError);
     const text = result.content[0].text;
-    assert.ok(text.includes("SUGGESTED ACTIONS"));
-    assert.ok(text.includes("guide_practice"));
-    assert.ok(text.includes("guide_distill"));
+    assert.ok(text.includes("Created new guide"));
+    assert.ok(text.includes("my-new-guide"));
+    assert.ok(text.includes("dev-tool"));
   });
 
   test("updating existing guide does NOT include SUGGESTED ACTIONS", async () => {
