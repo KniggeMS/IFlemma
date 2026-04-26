@@ -139,6 +139,30 @@ Lemma uses **vector-first semantic search** powered by `@huggingface/transformer
 
 Set `"enabled": false` to disable embeddings and use keyword search only. No restart needed — model loads lazily on first search. Startup auto-backfills any fragments missing vectors.
 
+### Manual Model Download
+
+If automatic download fails (slow connection, firewall, etc.), download the model manually:
+
+1. Download from Hugging Face: [Xenova/paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2) 
+2. Extract to the models directory:
+
+| OS | Target Path |
+|---|---|
+| **Windows** | `C:\Users\{username}\.lemma\models\Xenova\paraphrase-multilingual-MiniLM-L12-v2\` |
+| **macOS/Linux** | `~/.lemma/models/Xenova/paraphrase-multilingual-MiniLM-L12-v2/` |
+Final folder structure:
+```
+paraphrase-multilingual-MiniLM-L12-v2/
+├── config.json
+├── tokenizer.json
+├── tokenizer_config.json
+├── special_tokens_map.json
+└── onnx/
+    └── model.onnx
+```
+
+Restart your MCP client after placing the files.
+
 ## Security
 
 All data is stored locally in `~/.lemma/`. Nothing is sent to external servers. Secrets are automatically redacted from memory fragments (17 regex patterns for API keys, tokens, connection strings).
