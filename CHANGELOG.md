@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.9.1] - 2026-04-26
+
+### Added — Vector-First Search, Session Lifecycle, Docs Restructure
+
+- **Vector-first search** — When embedding model is ready, all search/dedup/overlap uses pure cosine similarity instead of Fuse.js keyword matching. Fuse.js only used as fallback when model unavailable, and for guide name matching (keyword-based).
+  - `searchAndSortFragments()` — pure vector search (cosine similarity)
+  - `findSimilarFragment()` — async, cosine dedup (threshold 0.85)
+  - `findTopicOverlaps()` — async, cosine overlap (0.5–0.85 range)
+- **Config-driven embeddings** — New `embeddings` section in `~/.lemma/config.json`:
+  - `embeddings.enabled` (default: true) — disable to use keyword search only
+  - `embeddings.model` — change embedding model name
+- **Immediate embedding on add** — `memory_add` now embeds fragments immediately at creation time instead of lazily on first search.
+- **Startup backfill** — `backfillEmbeddings()` runs on startup, auto-embeds any fragments missing vectors.
+- **Session lifecycle enforcement** — System prompt now includes rule: "ALWAYS call session_end when you finish a task." Session start message also reminds LLM to call session_end.
+- **Session synthesis** — On session finalize, LLM receives: "Synthesize this conversation: call memory_add with a concise summary..." appended to next tool response. Drives automatic session-to-memory knowledge transfer.
+- **Session idle threshold** — 2 minutes (was 30s), with 30s idle mark. 30min hard timeout as safety net.
+
+### Changed
+
+- **README** — Semantic Search section expanded with full model details (`paraphrase-multilingual-MiniLM-L12-v2`, 470MB, 384-dim, 50+ languages), architecture, and config example.
+- **ROADMAP** — v0.9 embeddings marked DONE, vector-first strategy documented (was "hybrid 0.4*fuse + 0.6*vector"), test count updated to 488.
+- **Docs restructured** — `docs/development/` (DEVELOPMENT.md, ROADMAP.md), `docs/research/` (papers, analysis). README simplified from 424→131 lines.
+- **`src/memory/embeddings.ts`** — Removed `hybridSearch()`, replaced with `vectorSearch()` (pure cosine). Added `backfillEmbeddings()`.
+- **`src/memory/core.ts`** — Removed `embedFragments()`. `findSimilarFragment` and `findTopicOverlaps` now async (return Promise).
+- **`src/server/system-prompt.ts`** — Added session_end rule (rule 6), fixed duplicate rule 6/7.
+- **`src/server/handlers.ts`** — `memory_add` calls `embedFragment()` after save. `session_end` calls `virtualSession.finalizeVirtualSession()`. All async function calls updated.
+
+### Tests
+
+- **488 tests** passing, 0 failures
+
+---
+
+## [0.9.0] - 2026-04-25
+
+### Added — AGENTS.md, Auto Session, Embeddings, Traffic Logger
+
+- **AGENTS.md auto-injection** — On startup, Lemma injects memory usage rules into the project's `AGENTS.md` file. LLM clients (Claude Code, opencode) read this as system instructions, ensuring consistent memory behavior.
+  - New module: `src/server/agents-md.ts`
+  - Injects Lemma rules section with start/end markers
+  - Idempotent: updates existing injection, preserves non-Lemma content
+- **Auto session start** — First tool call auto-starts a virtual session if none active. No explicit `session_start` needed.
+- **Auto session end** — Session idle for 2+ minutes triggers finalize on next tool call. 30-minute hard timeout as safety net.
+- **Embedding model integration** — `@huggingface/transformers` as optionalDependency. `paraphrase-multilingual-MiniLM-L12-v2` (384-dim, 50+ languages, ~470MB cached at `~/.lemma/models/`).
+  - New file: `src/memory/embeddings.ts` — `initEmbeddings()`, `embed()`, `cosineSimilarity()`, `searchByVector()`, `vectorSearch()`, `embedFragment()`
+  - Lazy loading: model loads in background, search works via Fuse.js until ready
+- **Traffic logger** — All MCP stdio traffic logged to `~/.lemma/logs/traffic/` for debugging client communication issues.
+  - New module: `src/server/traffic-log.ts`
+  - Incoming/outgoing JSON messages logged with timestamps
+
+### Changed
+
+- **AGENTS.md prompt** — Updated with session lifecycle rules and tool descriptions
+- **Session thresholds** — Idle timeout: 2min (was 30min), idle mark: 30s (was 10s), absolute timeout: 30min
+
+### Tests
+
+- **488 tests** passing, 0 failures
+
+---
+
 ## [0.8.8] - 2026-04-24
 
 ### Fixed — Test Suite Performance & CI Timeout

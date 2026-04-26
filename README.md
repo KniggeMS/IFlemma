@@ -113,7 +113,31 @@ Files: `memory.jsonl`, `guides.jsonl`, `config.json`, `sessions/`, `logs/`, `.ba
 
 ## Semantic Search
 
-Lemma includes optional embedding-based semantic search using `@huggingface/transformers` (optionalDependency). On first use, a 470MB multilingual model is downloaded to `~/.lemma/models/`. Until ready, search falls back to Fuse.js keyword matching. No configuration needed — it activates automatically.
+Lemma uses **vector-first semantic search** powered by `@huggingface/transformers` (optionalDependency). When active, all search, dedup, and topic overlap detection runs on cosine similarity instead of keyword matching.
+
+**Model:** `Xenova/paraphrase-multilingual-MiniLM-L12-v2`
+- **Size:** ~470 MB (cached at `~/.lemma/models/` after first download)
+- **Dimensions:** 384-dim vectors
+- **Languages:** 50+ languages including Turkish, English, German, French, Spanish, Chinese, Japanese
+- **Why this model:** Optimized for paraphrase detection and cross-lingual similarity. In TR-EN benchmarks, it outperforms `all-MiniLM-L12-v2` by 2-3x on semantic similarity tasks.
+
+**Architecture:**
+- `searchAndSortFragments()` — Pure vector search when model ready, Fuse.js fallback when not
+- `findSimilarFragment()` — Cosine dedup (threshold 0.85) replaces keyword dedup
+- `findTopicOverlaps()` — Cosine range (0.5–0.85) detects related but non-duplicate memories
+- Guide name matching — Always uses Fuse.js (keyword-based, embeddings add no value)
+
+**Config** (`~/.lemma/config.json`):
+```json
+{
+  "embeddings": {
+    "enabled": true,
+    "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2"
+  }
+}
+```
+
+Set `"enabled": false` to disable embeddings and use keyword search only. No restart needed — model loads lazily on first search. Startup auto-backfills any fragments missing vectors.
 
 ## Security
 

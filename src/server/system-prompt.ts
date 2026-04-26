@@ -24,7 +24,6 @@ MANDATORY BEHAVIOR — APPLY TO EVERY SESSION, EVERY TASK, EVERY RESPONSE:
 5. NEVER assume memory is always correct. Memories have confidence scores. Low-confidence or old memories may be outdated. When a memory contradicts observable reality, trust reality and update the memory with \`memory_update\`.
 6. ALWAYS call \`session_end\` when you finish a task. Include outcome ("success"/"partial"/"failure") and lessons learned. This finalizes the tracked session and triggers knowledge synthesis.
 7. When you see tool names: EXECUTE the tool, don't discuss it. Lemma is your memory — use it.
-6. When you see tool names: EXECUTE the tool, don't discuss it. Lemma is your memory — use it.
 </critical_rules>
 
 <workflow>
