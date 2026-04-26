@@ -54,7 +54,8 @@ export function loadConfig(): LemmaConfig {
       logger.data("config.json", "loaded", { hasCustom: true });
     } else {
       _config = { ...DEFAULT_CONFIG };
-      logger.data("config.json", "using_defaults");
+      fs.writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf-8");
+      logger.data("config.json", "created_with_defaults");
     }
   } catch {
     _config = { ...DEFAULT_CONFIG };
