@@ -283,37 +283,37 @@ describe("Memory Core", () => {
   });
 
   describe("searchAndSortFragments", () => {
-    test("sorts by confidence when no query", () => {
+    test("sorts by confidence when no query", async () => {
       const frags: MemoryFragment[] = [
         { ...core.createFragment("low", "ai"), confidence: 0.3 },
         { ...core.createFragment("high", "ai"), confidence: 0.9 },
       ];
-      const sorted: MemoryFragment[] = core.searchAndSortFragments(frags, null, 10);
+      const sorted: MemoryFragment[] = await core.searchAndSortFragments(frags, null, 10);
       assert.equal(sorted[0].confidence, 0.9);
     });
 
-    test("respects topK limit", () => {
+    test("respects topK limit", async () => {
       const frags: MemoryFragment[] = Array.from({ length: 50 }, (_, i) =>
         core.createFragment(`frag-${i}`, "ai")
       );
-      const sorted: MemoryFragment[] = core.searchAndSortFragments(frags, null, 10);
+      const sorted: MemoryFragment[] = await core.searchAndSortFragments(frags, null, 10);
       assert.equal(sorted.length, 10);
     });
 
-    test("fuzzy search returns relevant results", () => {
+    test("fuzzy search returns relevant results", async () => {
       const frags: MemoryFragment[] = [
         core.createFragment("react component patterns", "ai"),
         core.createFragment("python data analysis", "ai"),
       ];
-      const results: MemoryFragment[] = core.searchAndSortFragments(frags, "react", 10);
+      const results: MemoryFragment[] = await core.searchAndSortFragments(frags, "react", 10);
       assert.ok(results.length >= 1);
       assert.ok(results[0].fragment.includes("react"));
     });
 
-    test("updates lastAccessed on returned fragments", () => {
+    test("updates lastAccessed on returned fragments", async () => {
       const frag: MemoryFragment = core.createFragment("test", "ai");
       const oldAccessed = frag.lastAccessed;
-      const results: MemoryFragment[] = core.searchAndSortFragments([frag], null, 10);
+      const results: MemoryFragment[] = await core.searchAndSortFragments([frag], null, 10);
       assert.ok(results[0].lastAccessed >= oldAccessed);
     });
   });

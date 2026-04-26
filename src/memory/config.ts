@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: LemmaConfig = {
     full_content: 5000,
     summary_index: 1000,
     guides_detail: 1000,
+    instructions: 500,
   },
   injection: {
     max_full_content_fragments: 15,
@@ -20,6 +21,7 @@ const DEFAULT_CONFIG: LemmaConfig = {
   },
   virtual_session: {
     timeout_minutes: 30,
+    idle_timeout_seconds: 120,
   },
 };
 

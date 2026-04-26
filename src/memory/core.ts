@@ -5,6 +5,7 @@ import crypto from "crypto";
 import Fuse from "fuse.js";
 import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult, FragmentType } from "../types.js";
 import { logger } from "../logger.js";
+import { hybridSearch, isEmbeddingsReady, embed } from "./embeddings.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
 let MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
@@ -395,7 +396,7 @@ function injectionScore(fragment: MemoryFragment): number {
   return confidence * 0.7 + recency * 0.3;
 }
 
-export function searchAndSortFragments(fragments: MemoryFragment[], query: string | null = null, topK = 30): MemoryFragment[] {
+export async function searchAndSortFragments(fragments: MemoryFragment[], query: string | null = null, topK = 30): Promise<MemoryFragment[]> {
   logger.flow("search", "start", { query: query?.slice(0, 50), topK, totalFragments: fragments.length });
   const nowDate = new Date().toISOString();
 
@@ -424,6 +425,19 @@ export function searchAndSortFragments(fragments: MemoryFragment[], query: strin
   const fuse = new Fuse(fragments, fuseOptions);
   const fuseResults = fuse.search(query, { limit: topK });
 
+  if (fuseResults.length > 0 && isEmbeddingsReady()) {
+    const hybridResults = await hybridSearch(query, fragments, fuseResults, topK);
+    const topResults = hybridResults.map(r => r.item as MemoryFragment);
+    topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
+    topResults.forEach(frag => { frag.lastAccessed = nowDate; });
+
+    if (!fragments[0]?.embedding && isEmbeddingsReady()) {
+      embedFragments(fragments).catch(() => {});
+    }
+
+    return topResults;
+  }
+
   if (fuseResults.length > 0) {
     logger.flow("search", "fuse_results", { count: fuseResults.length });
     const topResults = fuseResults.map(r => r.item);
@@ -439,6 +453,32 @@ export function searchAndSortFragments(fragments: MemoryFragment[], query: strin
 
   fallback.forEach(frag => { frag.lastAccessed = nowDate; });
   return fallback;
+}
+
+export async function embedFragments(fragments: MemoryFragment[]): Promise<number> {
+  if (!isEmbeddingsReady()) return 0;
+
+  let embedded = 0;
+  for (const frag of fragments) {
+    if (frag.embedding) continue;
+    const vector = await embed(`${frag.title} ${frag.fragment}`);
+    if (vector) {
+      frag.embedding = vector;
+      embedded++;
+    }
+  }
+
+  if (embedded > 0) {
+    logger.flow("embeddings", "fragments_embedded", { count: embedded });
+    try {
+      await saveMemorySafe(fragments);
+      logger.flow("embeddings", "saved_after_embed", { count: embedded });
+    } catch (e) {
+      logger.warn("Failed to save embeddings to disk", (e as Error).message);
+    }
+  }
+
+  return embedded;
 }
 
 export function filterFragments(

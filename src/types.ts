@@ -35,6 +35,7 @@ export interface MemoryFragment {
   type: FragmentType;
   related_guides: string[];
   distill_candidate?: boolean;
+  embedding?: number[];
 }
 
 export interface Guide {
@@ -144,6 +145,7 @@ export interface LemmaConfig {
     full_content: number;
     summary_index: number;
     guides_detail: number;
+    instructions: number;
   };
   injection: {
     max_full_content_fragments: number;
@@ -153,6 +155,7 @@ export interface LemmaConfig {
   };
   virtual_session: {
     timeout_minutes: number;
+    idle_timeout_seconds: number;
   };
 }
 

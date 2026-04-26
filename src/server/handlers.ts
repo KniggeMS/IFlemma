@@ -3,6 +3,7 @@ import * as guides from "../guides/index.js";
 import * as sessions from "../sessions/index.js";
 import * as virtualSession from "../sessions/virtual.js";
 import { logger } from "../logger.js";
+import { isEmbeddingsReady, embed } from "../memory/embeddings.js";
 import type { FragmentType } from "../types.js";
 
 interface ToolResult {
@@ -151,6 +152,59 @@ export function resetSessionState(): void {
   virtualSession.finalizeVirtualSession();
 }
 
+export function autoStartSession(project: string | null): void {
+  if (activeSessionId) {
+    logger.flow("auto_session", "start_skipped", { reason: "already_active", activeSessionId });
+    return;
+  }
+
+  console.error(`[Lemma] Auto-starting session (triggered by first tool call)`);
+
+  const allSessions = sessions.loadSessions();
+  const existing = sessions.findActiveSession(allSessions);
+  if (existing) {
+    existing.status = "abandoned";
+    existing.task_outcome = "abandoned";
+    console.error(`[Lemma] Abandoned previous session: ${existing.session_id}`);
+  }
+
+  const session = sessions.createSession("auto", []);
+  session.initial_approach = null;
+  activeSessionId = session.session_id;
+  allSessions.push(session);
+  sessions.saveSessions(allSessions);
+
+  console.error(`[Lemma] Auto-session started: ${session.session_id} (project: ${project || "unknown"})`);
+  logger.flow("auto_session", "started", { session_id: session.session_id, project });
+}
+
+export function autoEndSession(vs: any): void {
+  if (!activeSessionId) return;
+
+  const allSessions = sessions.loadSessions();
+  const session = sessions.findSession(allSessions, activeSessionId);
+  if (!session) return;
+
+  const toolCount = vs.duration_tool_calls || 0;
+  const techs = vs.technologies || [];
+  const memCreated = vs.memories_created || [];
+  const guidesUsed = vs.guides_used || [];
+  const project = vs.project || null;
+
+  sessions.endSession(session, "success", null, []);
+  sessions.saveSessions(allSessions);
+  activeSessionId = null;
+
+  logger.flow("auto_session", "ended", {
+    session_id: session.session_id,
+    tool_calls: toolCount,
+    techs: techs.length,
+    mem_created: memCreated.length,
+    guides_used: guidesUsed.length,
+    project,
+  });
+}
+
 function getSessionContext(): { memoriesAccessed: string[]; memoriesCreated: string[]; guidesUsed: string[] } {
   const vs = virtualSession.getCurrentVirtualSession();
   return {
@@ -219,7 +273,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   logger.data("memory.json", "load");
   const allMemory = core.loadMemory();
   const projectMemory = core.filterByProject(allMemory, core.detectProject());
-  const relevantResults = core.searchAndSortFragments(projectMemory, taskDesc, 3);
+  const relevantResults = await core.searchAndSortFragments(projectMemory, taskDesc, 3);
   logger.flow("session_start", "preload_memories", { relevant_count: relevantResults.length, project_memory_count: projectMemory.length });
 
   for (const frag of relevantResults) {
@@ -455,7 +509,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
 
   logger.debug("memory_read filter", { showAll, project: currentProject, before_filter: memory.length, after_filter: filteredMemory.length });
 
-  let results = core.searchAndSortFragments(filteredMemory, query, 30);
+  let results = await core.searchAndSortFragments(filteredMemory, query, 30);
 
   results = core.filterFragments(results, {
     minConfidence: args?.minConfidence,
@@ -576,6 +630,17 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   }
   memory.push(newFragment);
   logger.data("memory.json", "save", { reason: "add_fragment", id: newFragment.id, total: memory.length });
+
+  if (isEmbeddingsReady()) {
+    try {
+      const vector = await embed(`${newFragment.title} ${newFragment.fragment}`);
+      if (vector) {
+        newFragment.embedding = vector;
+        logger.flow("memory_add", "embedded", { id: newFragment.id });
+      }
+    } catch {}
+  }
+
   core.saveMemory(memory);
   notifyMemoryChange();
 
@@ -677,6 +742,7 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     memory[targetIndex].relations = (memory[targetIndex].relations || []).filter(
       (rel: any) => memory.some((f: any) => f.id === rel.id)
     );
+    memory[targetIndex].embedding = undefined;
   }
 
   if (confidence !== undefined) {
@@ -689,6 +755,16 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     }
     logger.debug("memory_update updating_confidence", { id, new_confidence: confidence });
     memory[targetIndex].confidence = confidence;
+  }
+
+  if (isEmbeddingsReady() && memory[targetIndex].embedding === undefined && (fragment !== undefined || title !== undefined)) {
+    try {
+      const vector = await embed(`${memory[targetIndex].title} ${memory[targetIndex].fragment}`);
+      if (vector) {
+        memory[targetIndex].embedding = vector;
+        logger.flow("memory_update", "re_embedded", { id });
+      }
+    } catch {}
   }
 
   logger.data("memory.json", "save", { reason: "update_fragment", id });

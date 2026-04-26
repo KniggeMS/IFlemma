@@ -11,9 +11,9 @@ import {
 import * as core from "../memory/index.js";
 import * as guides from "../guides/index.js";
 import * as virtualSession from "../sessions/virtual.js";
-import { BASE_SYSTEM_PROMPT } from "./system-prompt.js";
+import { BASE_SYSTEM_PROMPT, buildInstructions, buildInjectedTools } from "./system-prompt.js";
 import { TOOLS } from "./tools.js";
-import { handleCallTool } from "./handlers.js";
+import { handleCallTool, autoStartSession, autoEndSession } from "./handlers.js";
 import { triggerHook, HookTypes } from "./hooks.js";
 import * as core_config from "../memory/config.js";
 import { setNotifyChange } from "./handlers.js";
@@ -49,7 +49,8 @@ export function getServer(): Server {
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: TOOLS };
+  const tools = await buildInjectedTools(detectedProject);
+  return { tools };
 });
 
 server.setRequestHandler(InitializeRequestSchema, async (_request) => {
@@ -63,8 +64,11 @@ server.setRequestHandler(InitializeRequestSchema, async (_request) => {
     console.error(`[Lemma] Detected project: ${detectedProject}`);
   }
 
+  const instructions = buildInstructions(detectedProject);
+
   logger.response("initialize", false, 0, {
     project: detectedProject,
+    instructionsLength: instructions.length,
   });
 
   return {
@@ -81,6 +85,7 @@ server.setRequestHandler(InitializeRequestSchema, async (_request) => {
       name: "lemma",
       version: "1.0.0",
     },
+    instructions,
   };
 });
 
@@ -193,9 +198,47 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
       virtualSession.recordToolCall(
         toolName,
         (request.params as any).arguments,
-        result
+        result,
+        detectedProject
       );
-    } catch {}
+    } catch (e) {
+      console.error(`[Lemma][DEBUG] recordToolCall threw: ${(e as Error).message}`);
+    }
+
+    console.error(`[Lemma][DEBUG] tool=${toolName} isError=${!!result.isError} hasContent=${!!result.content?.[0]?.text}`);
+
+    if (
+      !result.isError &&
+      toolName !== "memory_add" &&
+      toolName !== "memory_update" &&
+      toolName !== "memory_feedback" &&
+      toolName !== "guide_practice"
+    ) {
+      const reminder = virtualSession.getReminderText();
+      if (reminder && result.content?.[0]?.text) {
+        result.content[0].text += reminder;
+        console.error(`[Lemma] Reminder appended to ${toolName} response`);
+      }
+    }
+
+    const sessionEndMsg = virtualSession.consumeSessionEndMessage();
+    console.error(`[Lemma][DEBUG] sessionEndMsg=${JSON.stringify(sessionEndMsg)}`);
+    if (sessionEndMsg && result.content?.[0]?.text) {
+      result.content[0].text += sessionEndMsg;
+      console.error(`[Lemma] Session end message appended to ${toolName} response`);
+    } else if (sessionEndMsg) {
+      console.error(`[Lemma][DEBUG] sessionEndMsg set but no content text to append to`);
+    }
+
+    const sessionStartMsg = virtualSession.consumeSessionStartMessage();
+    console.error(`[Lemma][DEBUG] sessionStartMsg=${JSON.stringify(sessionStartMsg)}`);
+    if (sessionStartMsg && result.content?.[0]?.text) {
+      result.content[0].text += sessionStartMsg;
+      console.error(`[Lemma] Session start message appended to ${toolName} response`);
+    } else if (sessionStartMsg) {
+      console.error(`[Lemma][DEBUG] sessionStartMsg set but no content text to append to`);
+    }
+
     return result;
   } catch (error) {
     const duration = Date.now() - start;
@@ -217,6 +260,12 @@ async function initializeContext(): Promise<void> {
   });
 
   virtualSession.setVirtualSessionConfig(cfg.virtual_session);
+  virtualSession.setAutoStartSession(() => autoStartSession(detectedProject));
+  virtualSession.setAutoEndSession((vs) => autoEndSession(vs));
+  virtualSession.setFindMissingGuides((techs) => {
+    const allGuides = guides.loadGuides();
+    return techs.filter(t => !guides.findGuide(allGuides, t));
+  });
   logger.flow("initialize_context", "virtual_session_config_set");
 
   const memory = core.loadMemory();
@@ -243,6 +292,9 @@ async function initializeContext(): Promise<void> {
 
   core.applySessionDecay();
   logger.flow("initialize_context", "decay_applied");
+
+  core.initEmbeddings().catch(() => {});
+  logger.flow("initialize_context", "embeddings_init_started");
 
   detectedProject = core.detectProject();
 
@@ -341,6 +393,27 @@ export async function startServer(): Promise<void> {
 
   logger.flow("server", "notify_callback_set");
 }
+
+function gracefulShutdown(signal: string): void {
+  console.error(`[Lemma] ${signal} received — finalizing session`);
+  logger.flow("server", "shutdown", { signal });
+
+  const vs = virtualSession.getCurrentVirtualSession();
+  if (vs && vs.tool_calls.length > 0) {
+    console.error(`[Lemma] Finalizing virtual session ${vs.id} (${vs.tool_calls.length} tool calls)`);
+    const finalized = virtualSession.finalizeVirtualSession();
+    if (finalized) {
+      console.error(`[Lemma] Virtual session finalized: ${finalized.id}`);
+    }
+  } else {
+    console.error(`[Lemma] No active virtual session to finalize`);
+  }
+
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 const argv1 = process.argv[1];
 if (argv1 && import.meta.url === `file://${argv1.replace(/\\/g, '/')}`) {

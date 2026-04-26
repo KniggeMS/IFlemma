@@ -5,6 +5,22 @@ import { logger } from "../logger.js";
 import * as guides from "../guides/index.js";
 import type { VirtualSession, ToolCallEntry } from "../types.js";
 
+let _autoStartFn: ((project: string | null) => void) | null = null;
+let _autoEndFn: ((vs: FinalizedVirtualSession) => void) | null = null;
+let _findMissingGuidesFn: ((techs: string[]) => string[]) | null = null;
+
+export function setAutoStartSession(fn: (project: string | null) => void): void {
+  _autoStartFn = fn;
+}
+
+export function setAutoEndSession(fn: (vs: FinalizedVirtualSession) => void): void {
+  _autoEndFn = fn;
+}
+
+export function setFindMissingGuides(fn: (techs: string[]) => string[]): void {
+  _findMissingGuidesFn = fn;
+}
+
 interface FinalizedVirtualSession {
   id: string;
   started_at: string;
@@ -39,14 +55,43 @@ function ensureLogDir(): string {
 
 let currentVirtualSession: VirtualSession | null = null;
 let sessionTimeout: ReturnType<typeof setTimeout> | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let idleSince: number | null = null;
+const IDLE_THRESHOLD_MS = 30_000;
+const IDLE_DETECT_MS = 10_000;
 let config: { timeout_minutes: number } = { timeout_minutes: 30 };
 
-export function setVirtualSessionConfig(cfg: { timeout_minutes: number } | null): void {
-  if (cfg) config = cfg;
+let _pendingSessionEndMessage: string | null = null;
+let _pendingSessionStartMessage: string | null = null;
+
+export function setVirtualSessionConfig(cfg: { timeout_minutes: number; idle_timeout_seconds?: number } | null): void {
+  if (cfg) {
+    config = {
+      timeout_minutes: cfg.timeout_minutes,
+    };
+  }
 }
 
-export function recordToolCall(toolName: string, args: any, result: any): VirtualSession {
+export function recordToolCall(toolName: string, args: any, result: any, detectedProject?: string | null): VirtualSession {
   logger.flow("virtual_session", "record_tool", { tool: toolName });
+
+  if (currentVirtualSession && idleSince !== null) {
+    const idleMs = Date.now() - idleSince;
+    if (idleMs >= IDLE_THRESHOLD_MS) {
+      logger.flow("virtual_session", "finalize_on_next_call", {
+        sessionId: currentVirtualSession.id,
+        idleMs,
+        toolCalls: currentVirtualSession.tool_calls.length,
+      });
+      finalizeVirtualSession();
+    } else {
+      idleSince = null;
+      logger.flow("virtual_session", "continue_session", {
+        sessionId: currentVirtualSession.id,
+        idleMs,
+      });
+    }
+  }
 
   const entry: ToolCallEntry = {
     tool: toolName,
@@ -60,13 +105,29 @@ export function recordToolCall(toolName: string, args: any, result: any): Virtua
       id: "vs_" + Date.now().toString(36),
       started_at: new Date().toISOString(),
       tool_calls: [],
-      project: null,
+      project: detectedProject || null,
       technologies_seen: new Set(),
       guides_used: new Set(),
       memories_accessed: [],
       memories_created: [],
     };
+    idleSince = null;
     logger.flow("virtual_session", "created", { id: currentVirtualSession.id });
+
+    if (_autoStartFn) {
+      logger.flow("virtual_session", "auto_start_calling", { fn: "set" });
+      try {
+        _autoStartFn(currentVirtualSession.project);
+        logger.flow("virtual_session", "auto_start_completed");
+      } catch (e) {
+        logger.error("auto_start_session failed", (e as Error).message);
+        logger.flow("virtual_session", "auto_start_failed", { error: (e as Error).message });
+      }
+    } else {
+      logger.flow("virtual_session", "auto_start_skipped", { reason: "fn_not_set" });
+    }
+
+    _pendingSessionStartMessage = `\n\n---\n**Lemma session started** (${currentVirtualSession.id}). Your tool calls are being tracked. Use memory_add to persist insights, guide_practice to track skill usage.`;
   }
 
   currentVirtualSession.tool_calls.push(entry);
@@ -79,17 +140,68 @@ export function recordToolCall(toolName: string, args: any, result: any): Virtua
     currentVirtualSession.technologies_seen.add(tech);
   }
 
+  resetIdleTimer();
   resetTimeout();
 
   return currentVirtualSession;
+}
+
+export function shouldRemindSave(): boolean {
+  if (!currentVirtualSession) return false;
+  const tc = currentVirtualSession.tool_calls.length;
+  const saved = currentVirtualSession.memories_created.length;
+  return tc >= 5 && saved === 0 && tc % 5 === 0;
+}
+
+export function shouldRemindGuide(): boolean {
+  if (!currentVirtualSession) return false;
+  const tc = currentVirtualSession.tool_calls.length;
+  const practiced = [...currentVirtualSession.guides_used].length;
+  return tc >= 4 && practiced === 0 && tc % 6 === 0;
+}
+
+export function getReminderText(): string {
+  const parts: string[] = [];
+  if (shouldRemindSave()) {
+    parts.push("[Lemma] You've made several tool calls without saving. If you've learned something worth persisting (pattern, decision, bug fix, architectural insight), call memory_add before this conversation ends.");
+  }
+  if (shouldRemindGuide() && currentVirtualSession) {
+    const techs = [...currentVirtualSession.technologies_seen];
+    if (techs.length > 0) {
+      const missing: string[] = _findMissingGuidesFn ? _findMissingGuidesFn(techs) : [];
+      if (missing.length > 0) {
+        parts.push(`[Lemma] No guides found for: ${missing.join(", ")}. If you've developed a reusable approach, call guide_create to capture it. For existing guides, call guide_practice to track experience.`);
+      } else {
+        parts.push(`[Lemma] Technologies detected: ${techs.join(", ")}. Call guide_practice to track your experience and build competence over time.`);
+      }
+    }
+  }
+  return parts.length > 0 ? "\n\n" + parts.join("\n") : "";
+}
+
+function resetIdleTimer(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleSince = null;
+  idleTimer = setTimeout(() => {
+    if (currentVirtualSession && currentVirtualSession.tool_calls.length > 0) {
+      idleSince = Date.now();
+      logger.flow("virtual_session", "marked_idle", {
+        sessionId: currentVirtualSession.id,
+        toolCalls: currentVirtualSession.tool_calls.length,
+      });
+    }
+  }, IDLE_DETECT_MS);
+  idleTimer.unref();
 }
 
 function resetTimeout(): void {
   logger.flow("virtual_session", "timeout_reset", { minutes: config.timeout_minutes });
   if (sessionTimeout) clearTimeout(sessionTimeout);
   sessionTimeout = setTimeout(() => {
+    logger.flow("virtual_session", "absolute_timeout", {});
     finalizeVirtualSession();
   }, config.timeout_minutes * 60 * 1000);
+  sessionTimeout.unref();
 }
 
 function summarizeArgs(tool: string, args: any): string | null {
@@ -186,16 +298,66 @@ export function finalizeVirtualSession(): FinalizedVirtualSession | null {
   }
 
   currentVirtualSession = null;
+  idleSince = null;
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
   if (sessionTimeout) {
     clearTimeout(sessionTimeout);
     sessionTimeout = null;
   }
+
+  if (_autoEndFn) {
+    try {
+      _autoEndFn(session as FinalizedVirtualSession);
+    } catch (e) {
+      logger.error("auto_end_session failed", (e as Error).message);
+    }
+  }
+
+  const techs = session.technologies || [];
+  const toolCount = session.duration_tool_calls || 0;
+  const memCreated = session.memories_created || [];
+  const guidesUsed = session.guides_used || [];
+  const project = session.project || "unknown";
+
+  if (toolCount >= 1) {
+    const parts: string[] = [
+      `\n\n---`,
+      `**[Lemma] Session ended** (${session.id})`,
+      `Project: ${project} | Tool calls: ${toolCount}`,
+    ];
+    if (techs.length > 0) parts.push(`Technologies: ${techs.join(", ")}`);
+    if (memCreated.length > 0) parts.push(`Memories created: ${memCreated.length}`);
+    if (guidesUsed.length > 0) parts.push(`Guides: ${guidesUsed.join(", ")}`);
+    parts.push(``);
+    parts.push(`Synthesize this conversation: call memory_add with a concise summary of what was discussed, decided, or accomplished. Use type "context" and project "${project}".`);
+    _pendingSessionEndMessage = parts.join("\n");
+  } else {
+    _pendingSessionEndMessage = null;
+  }
+  logger.flow("virtual_session", "finalize_done", { id: session.id, hasEndMessage: !!_pendingSessionEndMessage });
 
   return session as FinalizedVirtualSession;
 }
 
 export function getCurrentVirtualSession(): VirtualSession | null {
   return currentVirtualSession;
+}
+
+export function consumeSessionEndMessage(): string | null {
+  const msg = _pendingSessionEndMessage;
+  _pendingSessionEndMessage = null;
+  console.error(`[Lemma][DEBUG] consumeSessionEndMessage: ${msg ? "returned message" : "null"}`);
+  return msg;
+}
+
+export function consumeSessionStartMessage(): string | null {
+  const msg = _pendingSessionStartMessage;
+  _pendingSessionStartMessage = null;
+  console.error(`[Lemma][DEBUG] consumeSessionStartMessage: ${msg ? "returned message" : "null"}`);
+  return msg;
 }
 
 export function getRecentSessions(count: number = 10): FinalizedVirtualSession[] {

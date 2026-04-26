@@ -71,7 +71,7 @@ function write(level: string, message: string, meta?: unknown): void {
     const line = formatMessage(level, message, meta);
     fs.appendFileSync(getLogFilePath(), line + "\n", "utf-8");
 
-    if (level === "ERROR" || level === "WARN") {
+    if (level === "ERROR" || level === "WARN" || level === "INFO") {
       console.error(`[Lemma] ${line}`);
     }
   } catch {}
