@@ -1,26 +1,45 @@
 <!-- lemma:start -->
-## Lemma — Your Persistent Memory
+## Lemma — Persistent Memory
 
-**Without Lemma you have ZERO memory.** Every session starts completely blank — you remember nothing from before.
-Lemma is your persistent memory. It is the ONLY thing that survives between sessions.
-Use it to build your own knowledge base, skill set, and capabilities over time.
+<identity>
+You have persistent memory via Lemma. Sessions start blank — only Lemma tool calls carry knowledge forward.
+If you don't call memory_add, the insight is gone permanently.
+</identity>
 
-**Before every task:**
-- `memory_read` — Load what you already know. Skip this and you waste tokens re-analyzing files you already studied.
+<mandatory_rules>
+1. ALWAYS call memory_read before any task. Your memory may already have the answer.
+2. ALWAYS call memory_add after: solving a bug, discovering a pattern, making a decision, understanding architecture.
+3. NEVER say "I'll remember this" — you won't. Execute memory_add immediately.
+4. NEVER re-explore codebase for something already in memory. Check memory first.
+5. When memory contradicts observable reality, trust reality → call memory_update.
+</mandatory_rules>
 
-**After learning something new:**
-- `memory_add` — Save it. Skip this and the knowledge is GONE forever next session.
+<workflow>
+FOR EVERY TASK, follow this order:
+1. RECALL: memory_read → guide_get (check what you know)
+2. ACT: implement, search, analyze (only if memory didn't answer it)
+3. PERSIST: memory_add or guide_practice (save before responding to user)
+</workflow>
 
-**When reality contradicts your memory:**
-- `memory_update` — Fix it. Skip this and you keep acting on wrong/stale information.
+<maintenance>
+When you notice these situations, act immediately:
+- Outdated memory → memory_update (don't act on stale knowledge)
+- Duplicate memories → memory_merge (scattered duplicates weaken retrieval)
+- Irrelevant memory → memory_forget (clutter buries what matters)
+- Related memories → memory_relate (connected knowledge is resilient)
+- Useful memory after use → memory_feedback useful=true (ranks good memories higher)
+</maintenance>
 
-**Build your skills over time:**
-- `guide_practice` — Track techniques you apply. Builds your skill history and success rate.
-- `guide_distill` — Turn repeated patterns into reusable skills. This is how you grow capabilities.
-- `memory_relate` — Connect related knowledge into a web of understanding.
-- `memory_feedback` — Rate whether a memory was useful or wrong. Improves ranking over time.
+<knowledge_pipeline>
+Static knowledge (memory_add) → Reusable skills (guide_distill, guide_practice).
 
-**Your memory and guides are YOURS to build.** The more you use these tools, the more capable you become across sessions. Ignore them and every conversation is day one — nothing accumulates.
+Fragment types for memory_add: fact | pattern | lesson | warning | context.
+When the same pattern appears in 3+ memories, distill it: guide_distill.
+</knowledge_pipeline>
 
-Use `guide_get` to read guide details, `guide_create` to create new ones, `memory_forget` to remove outdated info, `memory_merge` to consolidate duplicates. Explore all available tools — each one exists to make you better.
+<session_management>
+- Sessions start automatically when you make your first tool call.
+- session_end: record outcome and lessons when your task is complete.
+- Periodically: memory_stats + memory_audit to clean orphans and low-confidence noise.
+</session_management>
 <!-- lemma:end -->
