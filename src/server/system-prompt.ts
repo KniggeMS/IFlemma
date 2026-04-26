@@ -22,6 +22,8 @@ MANDATORY BEHAVIOR — APPLY TO EVERY SESSION, EVERY TASK, EVERY RESPONSE:
 3. NEVER say "I'll remember this next time" — you won't. The ONLY way to persist knowledge is through \`memory_add\` or \`guide_practice\`. Execute the tool immediately, do not just promise to remember.
 4. NEVER re-discover what you already know. Check memory before exploring filesystem. If a memory fragment answers your question, use it.
 5. NEVER assume memory is always correct. Memories have confidence scores. Low-confidence or old memories may be outdated. When a memory contradicts observable reality, trust reality and update the memory with \`memory_update\`.
+6. ALWAYS call \`session_end\` when you finish a task. Include outcome ("success"/"partial"/"failure") and lessons learned. This finalizes the tracked session and triggers knowledge synthesis.
+7. When you see tool names: EXECUTE the tool, don't discuss it. Lemma is your memory — use it.
 6. When you see tool names: EXECUTE the tool, don't discuss it. Lemma is your memory — use it.
 </critical_rules>
 

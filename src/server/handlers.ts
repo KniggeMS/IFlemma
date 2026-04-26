@@ -439,6 +439,8 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
 
   response += buildHookBlock(reviewSuggestions);
 
+  virtualSession.finalizeVirtualSession();
+
   logger.flow("session_end", "complete", { session_id: session.session_id, outcome, improvement_suggestions: improvementLines.length });
   return {
     content: [{ type: "text", text: response }],
@@ -586,7 +588,7 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   logger.data("memory.json", "load");
   const memory: any[] = core.loadMemory();
 
-  const similarMatch = core.findSimilarFragment(memory, fragment, project);
+  const similarMatch = await core.findSimilarFragment(memory, fragment, project);
   if (similarMatch) {
     logger.warn("memory_add duplicate_detected", { similar_id: similarMatch.id, similar_title: similarMatch.title });
     return {
@@ -644,7 +646,13 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   core.saveMemory(memory);
   notifyMemoryChange();
 
-  const overlaps = core.findTopicOverlaps(memory, finalFragment, project, 5);
+  if (core.isEmbeddingsReady()) {
+    core.embedFragment(newFragment).then((did) => {
+      if (did) core.saveMemory(memory);
+    }).catch(() => {});
+  }
+
+  const overlaps = await core.findTopicOverlaps(memory, finalFragment, project, 5);
   logger.flow("memory_add", "overlap_check", { overlap_count: overlaps.length });
 
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";

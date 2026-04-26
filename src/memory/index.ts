@@ -11,7 +11,6 @@ export {
   filterByProject,
   decayConfidence,
   searchAndSortFragments,
-  embedFragments,
   filterFragments,
   formatMemoryForLLM,
   formatMemoryDetail,
@@ -31,4 +30,4 @@ export { scanForSecrets, redactSecrets } from "./privacy.js";
 
 export { seedMemory, getSeedCount, getSeedIds } from "./seed.js";
 
-export { initEmbeddings, isEmbeddingsReady, embed, cosineSimilarity, searchByVector, hybridSearch } from "./embeddings.js";
+export { initEmbeddings, isEmbeddingsReady, embed, cosineSimilarity, searchByVector, vectorSearch, embedFragment, backfillEmbeddings } from "./embeddings.js";

@@ -293,7 +293,14 @@ async function initializeContext(): Promise<void> {
   core.applySessionDecay();
   logger.flow("initialize_context", "decay_applied");
 
-  core.initEmbeddings().catch(() => {});
+  core.initEmbeddings().then(() => {
+    if (core.isEmbeddingsReady()) {
+      const mem = core.loadMemory();
+      core.backfillEmbeddings(mem, async (m) => { core.saveMemory(m); }).then((count) => {
+        if (count > 0) logger.flow("initialize_context", "backfill_done", { count });
+      }).catch(() => {});
+    }
+  }).catch(() => {});
   logger.flow("initialize_context", "embeddings_init_started");
 
   detectedProject = core.detectProject();

@@ -23,6 +23,10 @@ const DEFAULT_CONFIG: LemmaConfig = {
     timeout_minutes: 30,
     idle_timeout_seconds: 120,
   },
+  embeddings: {
+    enabled: true,
+    model: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  },
 };
 
 let _config: LemmaConfig | null = null;

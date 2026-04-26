@@ -57,8 +57,8 @@ let currentVirtualSession: VirtualSession | null = null;
 let sessionTimeout: ReturnType<typeof setTimeout> | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let idleSince: number | null = null;
-const IDLE_THRESHOLD_MS = 30_000;
-const IDLE_DETECT_MS = 10_000;
+const IDLE_THRESHOLD_MS = 2 * 60_000;
+const IDLE_MARK_MS = 30_000;
 let config: { timeout_minutes: number } = { timeout_minutes: 30 };
 
 let _pendingSessionEndMessage: string | null = null;
@@ -127,7 +127,7 @@ export function recordToolCall(toolName: string, args: any, result: any, detecte
       logger.flow("virtual_session", "auto_start_skipped", { reason: "fn_not_set" });
     }
 
-    _pendingSessionStartMessage = `\n\n---\n**Lemma session started** (${currentVirtualSession.id}). Your tool calls are being tracked. Use memory_add to persist insights, guide_practice to track skill usage.`;
+    _pendingSessionStartMessage = `\n\n---\n**[Lemma] Session started** (${currentVirtualSession.id}). When you finish this task, call session_end with outcome and lessons. Use memory_add to persist insights, guide_practice to track skill usage.`;
   }
 
   currentVirtualSession.tool_calls.push(entry);
@@ -190,7 +190,7 @@ function resetIdleTimer(): void {
         toolCalls: currentVirtualSession.tool_calls.length,
       });
     }
-  }, IDLE_DETECT_MS);
+  }, IDLE_MARK_MS);
   idleTimer.unref();
 }
 

@@ -5,7 +5,7 @@ import crypto from "crypto";
 import Fuse from "fuse.js";
 import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult, FragmentType } from "../types.js";
 import { logger } from "../logger.js";
-import { hybridSearch, isEmbeddingsReady, embed } from "./embeddings.js";
+import { vectorSearch, isEmbeddingsReady, embed, cosineSimilarity, embedFragment, backfillEmbeddings } from "./embeddings.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
 let MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
@@ -83,11 +83,37 @@ export function createFragment(fragment: string, source: "user" | "ai", title: s
   };
 }
 
-export function findSimilarFragment(fragments: MemoryFragment[], fragmentText: string, project: string | null, threshold = 0.65): MemoryFragment | null {
+export async function findSimilarFragment(fragments: MemoryFragment[], fragmentText: string, project: string | null, threshold = 0.65): Promise<MemoryFragment | null> {
   const scopedFragments = filterByProject(fragments, project);
   if (scopedFragments.length === 0) return null;
 
   logger.flow("dedup", "checking", { threshold, scopedCount: scopedFragments.length });
+
+  if (isEmbeddingsReady()) {
+    const queryVec = await embed(fragmentText);
+    if (queryVec) {
+      let best: MemoryFragment | null = null;
+      let bestScore = 0;
+      const vectorThreshold = 0.85;
+
+      for (const frag of scopedFragments) {
+        if (!frag.embedding) continue;
+        const score = cosineSimilarity(queryVec, frag.embedding);
+        if (score > bestScore) {
+          bestScore = score;
+          best = frag;
+        }
+      }
+
+      if (best && bestScore >= vectorThreshold) {
+        logger.flow("dedup", "found_similar_vector", { id: best.id, score: bestScore });
+        return best;
+      }
+
+      logger.flow("dedup", "no_similar_vector");
+      return null;
+    }
+  }
 
   const fuse = new Fuse(scopedFragments, {
     keys: ['fragment', 'title'],
@@ -110,11 +136,30 @@ export function findSimilarFragment(fragments: MemoryFragment[], fragmentText: s
   return null;
 }
 
-export function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: string, project: string | null, limit = 5): MemoryFragment[] {
+export async function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: string, project: string | null, limit = 5): Promise<MemoryFragment[]> {
   const scopedFragments = filterByProject(fragments, project);
   if (scopedFragments.length === 0) return [];
 
   logger.flow("overlap", "searching", { scopedCount: scopedFragments.length });
+
+  if (isEmbeddingsReady()) {
+    const queryVec = await embed(fragmentText);
+    if (queryVec) {
+      const overlaps: { frag: MemoryFragment; score: number }[] = [];
+
+      for (const frag of scopedFragments) {
+        if (!frag.embedding) continue;
+        const score = cosineSimilarity(queryVec, frag.embedding);
+        if (score >= 0.5 && score < 0.85) {
+          overlaps.push({ frag, score });
+        }
+      }
+
+      overlaps.sort((a, b) => b.score - a.score);
+      logger.flow("overlap", "found_vector", { count: overlaps.length });
+      return overlaps.slice(0, limit).map(o => o.frag);
+    }
+  }
 
   const fuse = new Fuse(scopedFragments, {
     keys: ['fragment', 'title'],
@@ -422,21 +467,19 @@ export async function searchAndSortFragments(fragments: MemoryFragment[], query:
     findAllMatches: true
   };
 
+  if (isEmbeddingsReady()) {
+    const vectorResults = await vectorSearch(query, fragments, topK);
+
+    if (vectorResults.length > 0) {
+      const topResults = vectorResults.map(r => r.item as MemoryFragment);
+      topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
+      topResults.forEach(frag => { frag.lastAccessed = nowDate; });
+      return topResults;
+    }
+  }
+
   const fuse = new Fuse(fragments, fuseOptions);
   const fuseResults = fuse.search(query, { limit: topK });
-
-  if (fuseResults.length > 0 && isEmbeddingsReady()) {
-    const hybridResults = await hybridSearch(query, fragments, fuseResults, topK);
-    const topResults = hybridResults.map(r => r.item as MemoryFragment);
-    topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
-    topResults.forEach(frag => { frag.lastAccessed = nowDate; });
-
-    if (!fragments[0]?.embedding && isEmbeddingsReady()) {
-      embedFragments(fragments).catch(() => {});
-    }
-
-    return topResults;
-  }
 
   if (fuseResults.length > 0) {
     logger.flow("search", "fuse_results", { count: fuseResults.length });
@@ -453,32 +496,6 @@ export async function searchAndSortFragments(fragments: MemoryFragment[], query:
 
   fallback.forEach(frag => { frag.lastAccessed = nowDate; });
   return fallback;
-}
-
-export async function embedFragments(fragments: MemoryFragment[]): Promise<number> {
-  if (!isEmbeddingsReady()) return 0;
-
-  let embedded = 0;
-  for (const frag of fragments) {
-    if (frag.embedding) continue;
-    const vector = await embed(`${frag.title} ${frag.fragment}`);
-    if (vector) {
-      frag.embedding = vector;
-      embedded++;
-    }
-  }
-
-  if (embedded > 0) {
-    logger.flow("embeddings", "fragments_embedded", { count: embedded });
-    try {
-      await saveMemorySafe(fragments);
-      logger.flow("embeddings", "saved_after_embed", { count: embedded });
-    } catch (e) {
-      logger.warn("Failed to save embeddings to disk", (e as Error).message);
-    }
-  }
-
-  return embedded;
 }
 
 export function filterFragments(

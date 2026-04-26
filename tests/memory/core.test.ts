@@ -114,16 +114,16 @@ describe("Memory Core", () => {
   });
 
   describe("findSimilarFragment", () => {
-    test("finds similar fragment above threshold", () => {
+    test("finds similar fragment above threshold", async () => {
       const frags: MemoryFragment[] = [core.createFragment("react hooks use state management patterns", "ai", "React", "proj")];
-      const match: MemoryFragment | null = core.findSimilarFragment(frags, "react hooks use state patterns", "proj", 0.3);
+      const match: MemoryFragment | null = await core.findSimilarFragment(frags, "react hooks use state patterns", "proj", 0.3);
       assert.ok(match);
       assert.equal(match!.title, "React");
     });
 
-    test("returns null when no similar fragment exists", () => {
+    test("returns null when no similar fragment exists", async () => {
       const frags: MemoryFragment[] = [core.createFragment("python asyncio", "ai", "Py", "proj")];
-      const match: MemoryFragment | null = core.findSimilarFragment(frags, "react components", "proj");
+      const match: MemoryFragment | null = await core.findSimilarFragment(frags, "react components", "proj");
       assert.equal(match, null);
     });
   });

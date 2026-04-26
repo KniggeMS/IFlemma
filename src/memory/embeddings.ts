@@ -2,8 +2,8 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { logger } from "../logger.js";
+import { loadConfig } from "./config.js";
 
-const MODEL_NAME = "Xenova/paraphrase-multilingual-MiniLM-L12-v2";
 const CACHE_DIR = path.join(os.homedir(), ".lemma", "models");
 const MODEL_DIM = 384;
 
@@ -17,12 +17,20 @@ export function isEmbeddingsReady(): boolean {
 }
 
 export function getEmbeddingModelName(): string {
-  return MODEL_NAME;
+  return loadConfig().embeddings.model;
 }
 
 export async function initEmbeddings(): Promise<void> {
   if (isReady) return;
   if (initPromise) return initPromise;
+
+  const config = loadConfig();
+  if (!config.embeddings.enabled) {
+    logger.flow("embeddings", "disabled_by_config");
+    return;
+  }
+
+  const modelName = config.embeddings.model;
 
   initPromise = (async () => {
     try {
@@ -35,26 +43,26 @@ export async function initEmbeddings(): Promise<void> {
       env.allowLocalModels = true;
       env.allowRemoteModels = true;
 
-      const isFirstTime = !isModelCached(CACHE_DIR, MODEL_NAME);
+      const isFirstTime = !isModelCached(CACHE_DIR, modelName);
 
       if (isFirstTime) {
-        logger.info("Downloading semantic search model (~470MB, first time only)...");
+        logger.info(`Downloading semantic search model (${modelName}, first time only)...`);
       } else {
         logger.info("Loading cached semantic search model...");
       }
 
-      pipeline = await createPipeline("feature-extraction", MODEL_NAME, {
+      pipeline = await createPipeline("feature-extraction", modelName, {
         dtype: "fp32",
       });
 
       isReady = true;
       isInitializing = false;
-      logger.flow("embeddings", "ready", { model: MODEL_NAME, firstTime: isFirstTime });
+      logger.flow("embeddings", "ready", { model: modelName, firstTime: isFirstTime });
 
       if (isFirstTime) {
         logger.info("Model downloaded. Please restart MCP to activate semantic search.");
       } else {
-        logger.info(`Semantic search active (${MODEL_NAME})`);
+        logger.info(`Semantic search active (${modelName})`);
       }
     } catch (error) {
       isInitializing = false;
@@ -143,54 +151,69 @@ export async function searchByVector(
   return results.slice(0, topK);
 }
 
-export async function hybridSearch(
+export async function vectorSearch(
   query: string,
   fragments: any[],
-  fuseResults: any[],
   topK: number = 30
 ): Promise<any[]> {
-  if (!isReady || !pipeline) {
-    return fuseResults;
-  }
-
   const queryVector = await embed(query);
   if (!queryVector) {
     logger.flow("embeddings", "query_embed_failed");
-    return fuseResults;
+    return [];
   }
 
-  const scored = new Map<number, number>();
+  const vectorResults = await searchByVector(queryVector, fragments, topK);
 
-  for (const result of fuseResults) {
-    const idx = fragments.indexOf(result.item !== undefined ? result.item : result);
-    if (idx >= 0) {
-      const fuseScore = 1 - (result.score || 0);
-      scored.set(idx, fuseScore * 0.4);
-    }
-  }
-
-  const vectorResults = await searchByVector(queryVector, fragments, topK * 2);
-  for (const vr of vectorResults) {
-    const existing = scored.get(vr.index) || 0;
-    scored.set(vr.index, existing + vr.score * 0.6);
-  }
-
-  const ranked = [...scored.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topK);
-
-  const result = ranked.map(([idx, score]) => ({
-    item: fragments[idx],
+  const result = vectorResults.map(({ index, score }) => ({
+    item: fragments[index],
     score,
-    index: idx,
+    index,
   }));
 
-  logger.flow("embeddings", "hybrid_search", {
+  logger.flow("embeddings", "vector_search", {
     query: query.slice(0, 50),
-    fuse_count: fuseResults.length,
     vector_count: vectorResults.length,
-    merged_count: result.length,
+    returned: result.length,
   });
 
   return result;
+}
+
+export async function embedFragment(frag: { title?: string; fragment: string; embedding?: number[] }): Promise<boolean> {
+  if (!isReady || !pipeline) return false;
+  if (frag.embedding) return false;
+
+  const text = `${frag.title || ""} ${frag.fragment}`.trim();
+  const vector = await embed(text);
+  if (vector) {
+    frag.embedding = vector;
+    return true;
+  }
+  return false;
+}
+
+export async function backfillEmbeddings(fragments: any[], onSave: (fragments: any[]) => Promise<void>): Promise<number> {
+  if (!isReady || !pipeline) return 0;
+
+  const unembedded = fragments.filter((f: any) => !f.embedding);
+  if (unembedded.length === 0) return 0;
+
+  logger.flow("embeddings", "backfill_start", { count: unembedded.length });
+
+  let embedded = 0;
+  for (const frag of unembedded) {
+    const did = await embedFragment(frag);
+    if (did) embedded++;
+  }
+
+  if (embedded > 0) {
+    logger.flow("embeddings", "backfill_done", { embedded, total: unembedded.length });
+    try {
+      await onSave(fragments);
+    } catch (e) {
+      logger.warn("Backfill save failed", (e as Error).message);
+    }
+  }
+
+  return embedded;
 }

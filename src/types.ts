@@ -157,6 +157,10 @@ export interface LemmaConfig {
     timeout_minutes: number;
     idle_timeout_seconds: number;
   };
+  embeddings: {
+    enabled: boolean;
+    model: string;
+  };
 }
 
 export interface HookContext {
