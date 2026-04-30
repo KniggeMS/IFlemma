@@ -21,7 +21,7 @@ function makeFragment(id: string, text: string, type: MemoryFragment["type"] = "
     confidence: 0.8,
     source: "ai",
     created: "2026-04-15",
-    lastAccessed: null,
+    lastAccessed: "",
     accessed: 0,
     tags: [],
     associatedWith: [],

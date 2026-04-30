@@ -13,7 +13,7 @@ function makeFragment(id: string, text: string, title?: string): MemoryFragment 
     confidence: 0.8,
     source: "ai",
     created: "2026-04-15",
-    lastAccessed: null,
+    lastAccessed: "",
     accessed: 0,
     tags: [],
     associatedWith: [],
