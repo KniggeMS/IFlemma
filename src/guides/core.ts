@@ -77,7 +77,7 @@ function loadGuideLearnings(db: LemmaDB, guideId: number): string[] {
   return rows.map(r => r.learning);
 }
 
-function upsertGuideToDb(db: LemmaDB, g: Guide): void {
+export function upsertGuideToDb(db: LemmaDB, g: Guide): void {
   const now = new Date().toISOString();
   const existing = db.prepareCached("SELECT id FROM guides WHERE guide = ? COLLATE NOCASE").get(g.guide) as { id: number } | undefined;
 
@@ -175,6 +175,16 @@ export function createGuide(
   };
   logger.flow("guide_create", "created", { id: result.id });
   return result;
+}
+
+export function getGuideFromDb(name: string): Guide | null {
+  const db = getDb();
+  const row = db.prepareCached("SELECT * FROM guides WHERE guide = ? COLLATE NOCASE").get(name.toLowerCase().trim()) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  const guideId = Number(row.id);
+  const contexts = loadGuideContexts(db, guideId);
+  const learnings = loadGuideLearnings(db, guideId);
+  return rowToGuide(row, contexts, learnings);
 }
 
 export function loadGuides(): Guide[] {
@@ -802,3 +812,158 @@ export function formatGuideDetail(guide: Guide | null): string {
 }
 
 export { TASK_GUIDE_MAP };
+
+export function findGuideByName(name: string): Guide | null {
+  return getGuideFromDb(name);
+}
+
+export function findSimilarGuideByName(name: string): Guide | null {
+  const normalized = name.toLowerCase().trim();
+
+  const exact = getGuideFromDb(normalized);
+  if (exact) return exact;
+
+  try {
+    const db = getDb();
+    const terms = normalized
+      .split(/\s+/)
+      .filter(t => t.length > 1)
+      .map(t => `${t}*`)
+      .join(" OR ");
+
+    if (terms) {
+      const row = db.prepareCached(
+        `SELECT g.* FROM guides_fts fts
+         JOIN guides g ON g.id = fts.rowid
+         WHERE guides_fts MATCH ?
+         ORDER BY rank
+         LIMIT 1`
+      ).get(terms) as Record<string, unknown> | undefined;
+
+      if (row) {
+        const guideId = Number(row.id);
+        const contexts = loadGuideContexts(db, guideId);
+        const learnings = loadGuideLearnings(db, guideId);
+        return rowToGuide(row, contexts, learnings);
+      }
+    }
+  } catch (err) {
+    logger.warn("FTS5 search failed for findSimilarGuideByName", { error: String(err) });
+  }
+
+  try {
+    const db = getDb();
+    const row = db.prepareCached(
+      `SELECT * FROM guides WHERE name LIKE '%' || ? || '%' COLLATE NOCASE LIMIT 1`
+    ).get(normalized) as Record<string, unknown> | undefined;
+
+    if (row) {
+      const guideId = Number(row.id);
+      const contexts = loadGuideContexts(db, guideId);
+      const learnings = loadGuideLearnings(db, guideId);
+      return rowToGuide(row, contexts, learnings);
+    }
+  } catch (err) {
+    logger.warn("LIKE fallback failed for findSimilarGuideByName", { error: String(err) });
+  }
+
+  return null;
+}
+
+const STOP_WORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
+  "been", "being", "have", "has", "had", "do", "does", "did", "will",
+  "would", "could", "should", "may", "might", "can", "shall", "not",
+  "this", "that", "these", "those", "i", "we", "you", "he", "she",
+  "they", "me", "us", "him", "her", "them", "my", "our", "your",
+  "how", "what", "which", "who", "whom", "when", "where", "why",
+]);
+
+export function suggestGuidesForTask(taskDescription: string): { guides: Array<{ name: string; relevance: number; reason: string }> } {
+  const keywords = taskDescription
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(t => t.length > 2 && !STOP_WORDS.has(t))
+    .slice(0, 10);
+
+  if (keywords.length === 0) return { guides: [] };
+
+  const results: Array<{ name: string; relevance: number; reason: string; usage_count: number; last_used: string }> = [];
+
+  try {
+    const db = getDb();
+    const ftsTerms = keywords.map(t => `${t}*`).join(" OR ");
+
+    if (ftsTerms) {
+      const rows = db.prepareCached(
+        `SELECT g.guide, g.usage_count, g.last_used_at, g.category
+         FROM guides_fts fts
+         JOIN guides g ON g.id = fts.rowid
+         WHERE guides_fts MATCH ?
+         ORDER BY rank
+         LIMIT 10`
+      ).all(ftsTerms) as { guide: string; usage_count: number; last_used_at: string; category: string }[];
+
+      for (const row of rows) {
+        const daysSinceUsed = row.last_used_at
+          ? (Date.now() - new Date(row.last_used_at).getTime()) / 86400000
+          : 999;
+        const recency = Math.max(0, 1 - daysSinceUsed / 90);
+        const relevance = Math.min(1, (row.usage_count * 0.1) + (recency * 0.3) + 0.3);
+
+        results.push({
+          name: row.guide,
+          relevance: Math.round(relevance * 100) / 100,
+          reason: `Matched via search for: ${keywords.slice(0, 3).join(", ")}`,
+          usage_count: row.usage_count,
+          last_used: row.last_used_at,
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn("suggestGuidesForTask FTS failed", { error: String(err) });
+  }
+
+  results.sort((a, b) => b.relevance - a.relevance);
+  const top3 = results.slice(0, 3).map(({ name, relevance, reason }) => ({ name, relevance, reason }));
+  return { guides: top3 };
+}
+
+export function getTopGuidesFromDb(limit: number = 10): Guide[] {
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT * FROM guides ORDER BY usage_count DESC, last_used_at DESC LIMIT ?`
+    ).all(limit) as Record<string, unknown>[];
+
+    return rows.map(row => {
+      const guideId = Number(row.id);
+      const contexts = loadGuideContexts(db, guideId);
+      const learnings = loadGuideLearnings(db, guideId);
+      return rowToGuide(row, contexts, learnings);
+    });
+  } catch (err) {
+    logger.warn("getTopGuidesFromDb failed", { error: String(err) });
+    return [];
+  }
+}
+
+export function getGuidesByCategoryFromDb(category: string): Guide[] {
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT * FROM guides WHERE category = ? COLLATE NOCASE`
+    ).all(category.toLowerCase().trim()) as Record<string, unknown>[];
+
+    return rows.map(row => {
+      const guideId = Number(row.id);
+      const contexts = loadGuideContexts(db, guideId);
+      const learnings = loadGuideLearnings(db, guideId);
+      return rowToGuide(row, contexts, learnings);
+    });
+  } catch (err) {
+    logger.warn("getGuidesByCategoryFromDb failed", { error: String(err) });
+    return [];
+  }
+}

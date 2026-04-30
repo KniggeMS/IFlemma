@@ -165,6 +165,11 @@ export function updateMemory(
     context_tags: string[];
     quality_score: number | null;
     distill_candidate: boolean;
+    session_id: string | null;
+    task_type: string | null;
+    related_guides: string[];
+    access_count: number;
+    associated_with: string[];
   }>,
 ): boolean {
   const id = resolveId(lemmaDb, idOrLegacy);
@@ -208,6 +213,26 @@ export function updateMemory(
   if (updates.distill_candidate !== undefined) {
     setClauses.push("distill_candidate = ?");
     params.push(updates.distill_candidate ? 1 : 0);
+  }
+  if (updates.session_id !== undefined) {
+    setClauses.push("session_id = ?");
+    params.push(updates.session_id);
+  }
+  if (updates.task_type !== undefined) {
+    setClauses.push("task_type = ?");
+    params.push(updates.task_type);
+  }
+  if (updates.related_guides !== undefined) {
+    setClauses.push("related_guides = ?");
+    params.push(updates.related_guides.length > 0 ? JSON.stringify(updates.related_guides) : null);
+  }
+  if (updates.access_count !== undefined) {
+    setClauses.push("access_count = ?");
+    params.push(updates.access_count);
+  }
+  if (updates.associated_with !== undefined) {
+    setClauses.push("associated_with = ?");
+    params.push(updates.associated_with.length > 0 ? JSON.stringify(updates.associated_with) : null);
   }
 
   if (setClauses.length === 0) return false;
@@ -488,18 +513,18 @@ export function decayMemories(lemmaDb: LemmaDB): number {
 
 export function getMemoryStats(
   lemmaDb: LemmaDB,
-  project?: string,
+  project?: string | null,
 ): MemoryStats {
-  const projectWhere =
-    project !== undefined ? " WHERE project = ?" : "";
-  const projectParams = project !== undefined ? [project] : [];
+  const hasProject = typeof project === "string" && project.trim() !== "";
+  const projectWhere = hasProject ? " WHERE project = ?" : "";
+  const projectParams = hasProject ? [project!.trim().toLowerCase()] : [];
 
   const row = lemmaDb.prepareCached(
     `SELECT
        COUNT(*) as total,
        COALESCE(AVG(confidence), 0) as avg_confidence,
        SUM(CASE WHEN confidence < 0.3 THEN 1 ELSE 0 END) as low_confidence,
-       SUM(CASE WHEN confidence >= 0.7 THEN 1 ELSE 0 END) as high_confidence
+       SUM(CASE WHEN confidence > 0.8 THEN 1 ELSE 0 END) as high_confidence
      FROM memories${projectWhere}`,
   ).get(...projectParams) as {
     total: number;
@@ -513,8 +538,8 @@ export function getMemoryStats(
   ).all(...projectParams) as { source: string; count: number }[];
 
   const byProjectRows = lemmaDb.prepareCached(
-    "SELECT COALESCE(project, '(global)') as project, COUNT(*) as count FROM memories GROUP BY project",
-  ).all() as { project: string; count: number }[];
+    `SELECT COALESCE(project, '(global)') as project, COUNT(*) as count FROM memories${projectWhere} GROUP BY project`,
+  ).all(...projectParams) as { project: string; count: number }[];
 
   return {
     total: row.total,

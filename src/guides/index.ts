@@ -17,8 +17,15 @@ export {
   formatSuggestions,
   formatGuideDetail,
   setGuidesDir,
+  upsertGuideToDb,
+  getGuideFromDb,
   TASK_GUIDE_MAP,
-  removeMemoryFromGuides
+  removeMemoryFromGuides,
+  findGuideByName,
+  findSimilarGuideByName,
+  suggestGuidesForTask,
+  getTopGuidesFromDb,
+  getGuidesByCategoryFromDb
 } from "./core.js";
 
 export { seedGuides, getGuideSeedCount } from "./seed.js";

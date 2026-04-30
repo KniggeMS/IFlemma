@@ -4,6 +4,7 @@ import * as sessions from "../sessions/index.js";
 import * as virtualSession from "../sessions/virtual.js";
 import { logger } from "../logger.js";
 import { getDb } from "../db/database.js";
+import * as store from "../db/memory-store.js";
 
 import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import * as intel from "../intelligence/index.js";
@@ -274,26 +275,19 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   logger.data("sessions", "save", { session_id: session.session_id, total_sessions: allSessions.length });
   sessions.saveSessions(allSessions);
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
   const taskDesc = [taskType, ...technologies].join(" ");
-  const suggestions = guides.suggestGuides(taskDesc, allGuides);
+  const suggestions = guides.suggestGuides(taskDesc, []);
   logger.flow("session_start", "guide_suggestions", { task_desc: taskDesc, relevant: suggestions.relevant.length, suggested: suggestions.suggested.length });
 
   const formattedSuggestions = guides.formatSuggestions(suggestions);
 
-  logger.data("memory", "load");
-  const allMemory = core.loadMemory();
-  const projectMemory = core.filterByProject(allMemory, core.detectProject());
-  const relevantResults = await core.searchAndSortFragments(projectMemory, taskDesc, 3);
-  logger.flow("session_start", "preload_memories", { relevant_count: relevantResults.length, project_memory_count: projectMemory.length });
+  const relevantResults = core.searchMemory(taskDesc, { limit: 3 });
+  logger.flow("session_start", "preload_memories", { relevant_count: relevantResults.length });
 
+  const db = getDb();
   for (const frag of relevantResults) {
-    const boosted = core.boostOnAccess(frag);
-    Object.assign(frag, boosted);
+    store.boostConfidence(db, parseInt(frag.id, 10) || 0, 0.02);
   }
-  logger.data("memory", "save", { reason: "boost_preloaded", boosted_count: relevantResults.length });
-  core.saveMemory(allMemory);
 
   let response = `Session started: ${session.session_id} (${taskType})\n`;
   if (technologies.length > 0) {
@@ -350,14 +344,13 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
 
   sessions.endSession(session, outcome, finalApproach, lessons);
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
   const improvementLines: string[] = [];
 
   if (session.guides_used && session.guides_used.length > 0) {
     logger.flow("session_end", "evaluating_guides", { guides_used: session.guides_used, outcome });
+    const guideDb = getDb();
     for (const guideName of session.guides_used) {
-      const guide = guides.findGuide(allGuides, guideName);
+      const guide = guides.getGuideFromDb(guideName);
       if (guide) {
         if (outcome === "success") {
           guide.success_count = (guide.success_count || 0) + 1;
@@ -372,10 +365,9 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
             }
           }
         }
+        guides.upsertGuideToDb(guideDb, guide);
       }
     }
-    logger.data("guides", "save", { reason: "guide_success_tracking", guides_updated: session.guides_used.length });
-    guides.saveGuides(allGuides);
   }
 
   logger.data("sessions", "save", { session_id: session.session_id, outcome });
@@ -413,18 +405,21 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
     }
 
     if (sCtx.memoriesCreated.length > 0 && sCtx.memoriesAccessed.length > 0) {
-      const allMemory = core.loadMemory();
+      const db = getDb();
       let relateCount = 0;
       for (const createdId of sCtx.memoriesCreated) {
         if (relateCount >= 3) break;
         const lastRead = sCtx.memoriesAccessed[sCtx.memoriesAccessed.length - 1];
         if (createdId !== lastRead) {
-          core.addRelation(allMemory, createdId, lastRead, "related_to", "Auto-linked: same session");
-          relateCount++;
+          const srcRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(createdId) as { id: number } | undefined;
+          const tgtRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(lastRead) as { id: number } | undefined;
+          if (srcRow && tgtRow) {
+            store.addRelation(db, srcRow.id, tgtRow.id, "related_to", "Auto-linked: same session");
+            relateCount++;
+          }
         }
       }
       if (relateCount > 0) {
-        core.saveMemory(allMemory);
         response += `\nAuto-linked ${relateCount} created memories to session context.`;
       }
     }
@@ -443,7 +438,7 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   if (vs && vs.technologies_seen && vs.technologies_seen.size > 0) {
     const techs = [...vs.technologies_seen];
     response += `\nAuto-detected technologies: ${techs.join(", ")}`;
-    const matchedGuides = techs.filter(t => guides.findGuide(allGuides, t));
+    const matchedGuides = techs.filter(t => guides.getGuideFromDb(t));
     if (matchedGuides.length > 0) {
       response += `\nAuto-tracked guides: ${matchedGuides.join(", ")}`;
     }
@@ -468,26 +463,20 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
 
   logger.flow("memory_read", "start", { project: currentProject, query, id: detailId, ids: args?.ids?.length, all: showAll, context });
 
-  let memory: any[] = core.loadMemory();
-  logger.data("memory", "load", { total_fragments: memory.length });
-
   const detailIds = args?.ids || null;
   if (detailIds && Array.isArray(detailIds) && detailIds.length > 0) {
     logger.debug("memory_read batch_ids", { ids: detailIds });
     const results: string[] = [];
     for (const did of detailIds) {
-      const fragment = memory.find((f: any) => f.id === did);
+      const fragment = core.getFragmentById(did);
       if (fragment) {
         const boosted = core.boostOnAccess(fragment, context);
-        Object.assign(fragment, boosted);
-        results.push(core.formatMemoryDetail(fragment));
+        results.push(core.formatMemoryDetail(boosted));
       } else {
         logger.warn("memory_read batch_id not_found", { id: did });
         results.push(`Fragment [${did}] not found.`);
       }
     }
-    logger.data("memory", "save", { reason: "boost_batch_ids", count: detailIds.length });
-    core.saveMemory(memory);
     notifyMemoryChange();
     logger.flow("memory_read", "complete_batch", { ids_requested: detailIds.length });
     return {
@@ -497,7 +486,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
 
   if (detailId) {
     logger.flow("memory_read", "single_id_lookup", { id: detailId });
-    const fragment = memory.find((f: any) => f.id === detailId);
+    const fragment = core.getFragmentById(detailId);
     if (!fragment) {
       logger.warn("memory_read id not_found", { id: detailId });
       return {
@@ -506,24 +495,24 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
       };
     }
     const boosted = core.boostOnAccess(fragment, context);
-    Object.assign(fragment, boosted);
-    logger.data("memory", "save", { reason: "boost_single", id: detailId });
-    core.saveMemory(memory);
     notifyMemoryChange();
 
-    logger.flow("memory_read", "complete_single", { id: detailId, confidence: fragment.confidence?.toFixed(2) });
+    logger.flow("memory_read", "complete_single", { id: detailId, confidence: boosted.confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: core.formatMemoryDetail(fragment) }],
+      content: [{ type: "text", text: core.formatMemoryDetail(boosted) }],
     };
   }
 
-  const filteredMemory = showAll
-    ? memory
-    : core.filterByProject(memory, currentProject);
-
-  logger.debug("memory_read filter", { showAll, project: currentProject, before_filter: memory.length, after_filter: filteredMemory.length });
-
-  let results = await core.searchAndSortFragments(filteredMemory, query, 30);
+  let results: any[];
+  if (query) {
+    results = core.searchMemory(query, { limit: 30 });
+  } else {
+    results = core.searchMemory("", { limit: 200 });
+    if (!showAll) {
+      results = core.filterByProject(results, currentProject);
+    }
+    results = results.slice(0, 30);
+  }
 
   results = core.filterFragments(results, {
     minConfidence: args?.minConfidence,
@@ -534,43 +523,67 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   logger.flow("memory_read", "search_results", { query, result_count: (results as any[]).length, minConfidence: args?.minConfidence });
 
   const resultIds = new Set((results as any[]).map((r: any) => r.id));
-  for (const frag of memory) {
-    if (resultIds.has(frag.id)) {
-      const boosted = core.boostOnAccess(frag, context);
-      Object.assign(frag, boosted);
-    }
+  for (const frag of results) {
+    core.boostOnAccess(frag, context);
   }
 
   if (resultIds.size > 1) {
     const idArray = [...resultIds];
     for (const id of idArray) {
+      const target = (results as any[]).find((f: any) => f.id === id);
+      if (!target) continue;
       const others = idArray.filter(x => x !== id);
-      core.trackAssociations(memory, id, others);
+      const existing = new Set<string>(target.associatedWith || []);
+      for (const otherId of others) {
+        if (!existing.has(otherId)) {
+          existing.add(otherId);
+          const other = (results as any[]).find((f: any) => f.id === otherId);
+          if (other) {
+            const otherAssoc = new Set<string>(other.associatedWith || []);
+            if (!otherAssoc.has(id)) {
+              otherAssoc.add(id);
+              other.associatedWith = [...otherAssoc];
+            }
+          }
+        }
+      }
+      target.associatedWith = [...existing];
+    }
+    const assocDb = getDb();
+    for (const frag of results) {
+      if (resultIds.has(frag.id) && frag.associatedWith && frag.associatedWith.length > 0) {
+        core.updateFragmentInDb(frag.id, { associated_with: frag.associatedWith });
+      }
     }
   }
 
   let autoRelateCount = 0;
   if (resultIds.size > 1) {
+    const relateDb = getDb();
     const idArray = [...resultIds];
     const hub = idArray[0];
-    for (let i = 1; i < idArray.length && autoRelateCount < 3; i++) {
-      const success = core.addRelation(memory, hub, idArray[i], "related_to", "Auto-linked: co-read in same query");
-      if (success) autoRelateCount++;
+    const hubRow = relateDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(hub) as { id: number } | undefined;
+    if (hubRow) {
+      for (let i = 1; i < idArray.length && autoRelateCount < 3; i++) {
+        const targetRow = relateDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(idArray[i]) as { id: number } | undefined;
+        if (targetRow) {
+          const success = store.addRelation(relateDb, hubRow.id, targetRow.id, "related_to", "Auto-linked: co-read in same query");
+          if (success) autoRelateCount++;
+        }
+      }
     }
   }
 
   const scopeInfo = showAll ? "all projects" : currentProject || "global";
   const formatted = core.formatMemoryForLLM(results, scopeInfo);
-  logger.data("memory", "save", { reason: "boost_search_results", boosted_count: resultIds.size, auto_relate_count: autoRelateCount });
-  core.saveMemory(memory);
   notifyMemoryChange();
 
   let hookResponse = formatted;
   if (autoRelateCount > 0) {
     hookResponse += `\nAuto-linked ${autoRelateCount} co-read fragments with related_to relations.`;
   }
-  if (!query && !detailId && (results as any[]).length < memory.length) {
-    hookResponse += `\nShowing top ${(results as any[]).length} of ${memory.length} fragments (ranked by relevance). Use query parameter to search, or id for a specific fragment.`;
+  if (!query && !detailId) {
+    hookResponse += `\nShowing top ${(results as any[]).length} fragments (ranked by relevance). Use query parameter to search, or id for a specific fragment.`;
   }
 
   logger.flow("memory_read", "complete_search", { query, results: (results as any[]).length, scope: scopeInfo });
@@ -600,10 +613,14 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     };
   }
 
-  logger.data("memory", "load");
-  const memory: any[] = core.loadMemory();
+  logger.flow("memory_add", "secret_detection", { confirm: args?.confirm });
+  const { redacted, found } = core.redactSecrets(fragment);
+  const hasSecrets = found.length > 0;
+  const neverConfirmTypes = ["Private key", "OpenAI API key", "OpenAI project key", "GitHub token", "AWS access key"];
+  const hasCriticalSecrets = found.some(f => neverConfirmTypes.includes(f.type));
+  const finalFragment = hasSecrets && (!args?.confirm || hasCriticalSecrets) ? redacted : fragment;
 
-  const similarMatch = await core.findSimilarFragment(memory, fragment, project);
+  const similarMatch = core.findSimilarByText(finalFragment, project);
   if (similarMatch) {
     logger.warn("memory_add duplicate_detected", { similar_id: similarMatch.id, similar_title: similarMatch.title });
     return {
@@ -614,13 +631,6 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
       isError: true,
     };
   }
-
-  logger.flow("memory_add", "secret_detection", { confirm: args?.confirm });
-  const { redacted, found } = core.redactSecrets(fragment);
-  const hasSecrets = found.length > 0;
-  const neverConfirmTypes = ["Private key", "OpenAI API key", "OpenAI project key", "GitHub token", "AWS access key"];
-  const hasCriticalSecrets = found.some(f => neverConfirmTypes.includes(f.type));
-  const finalFragment = hasSecrets && (!args?.confirm || hasCriticalSecrets) ? redacted : fragment;
 
   if (hasCriticalSecrets && args?.confirm) {
     logger.warn("memory_add critical_secret_blocked", { secret_types: found.filter(f => neverConfirmTypes.includes(f.type)).map(f => f.type) });
@@ -636,10 +646,7 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     newFragment.distill_candidate = true;
   }
 
-  memory.push(newFragment);
-  logger.data("memory", "save", { reason: "add_fragment", id: newFragment.id, total: memory.length });
-
-  core.saveMemory(memory);
+  core.addFragmentToDb(newFragment);
 
   if (activeSessionId) {
     logger.data("sessions", "load");
@@ -647,17 +654,20 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     const session = sessions.findSession(allSessions, activeSessionId);
     if (session) {
       logger.flow("memory_add", "session_link", { session_id: activeSessionId, task_type: session.task_type });
+      core.updateFragmentInDb(newFragment.id, {
+        session_id: activeSessionId,
+        task_type: session.task_type,
+      });
       newFragment.session_id = activeSessionId;
       newFragment.task_type = session.task_type;
       session.memories_created = session.memories_created || [];
       session.memories_created.push(newFragment.id);
-      core.saveMemory(memory);
       logger.data("sessions", "save", { reason: "link_memory", session_id: activeSessionId });
       sessions.saveSessions(allSessions);
     }
   }
 
-  const overlaps = (await core.findTopicOverlaps(memory, finalFragment, project, 5))
+  const overlaps = core.findTopicOverlapsByText(finalFragment, project, 5)
     .filter(o => o.id !== newFragment.id);
   logger.flow("memory_add", "overlap_check", { overlap_count: overlaps.length });
 
@@ -671,8 +681,12 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   }
   if (overlaps.length > 0) {
     const strongest = overlaps[0];
-    core.addRelation(memory, newFragment.id, strongest.id, "related_to", `Auto-linked: topic overlap (${strongest.confidence.toFixed(2)})`);
-    core.saveMemory(memory);
+    const overlapDb = getDb();
+    const sourceRow = overlapDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(newFragment.id) as { id: number } | undefined;
+    const targetRow = overlapDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(strongest.id) as { id: number } | undefined;
+    if (sourceRow && targetRow) {
+      store.addRelation(overlapDb, sourceRow.id, targetRow.id, "related_to", `Auto-linked: topic overlap (${strongest.confidence.toFixed(2)})`);
+    }
     notifyMemoryChange();
     response += `\n\nRelated memories (auto-linked to strongest match):`;
     response += `\n  [${strongest.id}] "${strongest.title}" (${strongest.confidence.toFixed(2)}) — AUTO-LINKED`;
@@ -686,8 +700,12 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   const otherAccessed = sCtx.memoriesAccessed.filter(mid => mid !== newFragment.id);
   if (otherAccessed.length > 0) {
     const lastRead = otherAccessed[otherAccessed.length - 1];
-    core.addRelation(memory, newFragment.id, lastRead, "related_to", "Auto-linked: same session context");
-    core.saveMemory(memory);
+    const ctxDb = getDb();
+    const srcRow = ctxDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(newFragment.id) as { id: number } | undefined;
+    const tgtRow = ctxDb.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(lastRead) as { id: number } | undefined;
+    if (srcRow && tgtRow) {
+      store.addRelation(ctxDb, srcRow.id, tgtRow.id, "related_to", "Auto-linked: same session context");
+    }
     notifyMemoryChange();
     response += `\nAuto-linked to last read memory [${lastRead}] (same session context).`;
   }
@@ -695,13 +713,14 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     hookSuggestions.push(`This is a ${fragmentType}. Consider guide_distill to promote it into a reusable skill.`);
   }
 
-  const conflicts = intel.detectConflict(newFragment, memory.filter((f: any) => f.id !== newFragment.id));
+  const memoryForIntel = core.loadMemory();
+  const conflicts = intel.detectConflict(newFragment, memoryForIntel.filter((f: any) => f.id !== newFragment.id));
   if (conflicts.length > 0) {
     hookSuggestions.push(`CONFLICT: ${conflicts.length} potentially contradicting memory(ies) detected: ${conflicts.map(c => `[${c.memory_b_id}] "${c.memory_b_title}"`).join(", ")}. Use memory_relate with type "contradicts" to link.`);
   }
 
   const allGuides = guides.loadGuides();
-  const proactiveSuggestions = intel.checkAfterMemoryAdd(newFragment, memory, allGuides);
+  const proactiveSuggestions = intel.checkAfterMemoryAdd(newFragment, memoryForIntel, allGuides);
   if (proactiveSuggestions.length > 0) {
     response += intel.formatSuggestions(proactiveSuggestions);
   }
@@ -730,11 +749,9 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory", "load");
-  const memory: any[] = core.loadMemory();
-  const targetIndex = memory.findIndex((f: any) => f.id === id);
+  const target = core.getFragmentById(id);
 
-  if (targetIndex === -1) {
+  if (!target) {
     logger.warn("memory_update fragment not_found", { id });
     return {
       content: [{ type: "text", text: `Error: Fragment with ID '${id}' not found` }],
@@ -751,7 +768,6 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
       };
     }
     logger.debug("memory_update updating_title", { id, new_title: title });
-    memory[targetIndex].title = title;
   }
 
   if (fragment !== undefined) {
@@ -762,20 +778,28 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
         isError: true,
       };
     }
-    const similar = await core.findSimilarFragment(memory, fragment, memory[targetIndex].project || null);
-    if (similar && similar.id !== id) {
-      logger.warn("memory_update duplicate_detected", { id, similar_id: similar.id });
-      return {
-        content: [{ type: "text", text: `Error: Similar fragment already exists: [${similar.id}] "${similar.title}". Use a different content or update the existing one.` }],
-        isError: true,
-      };
+    const db = getDb();
+    const ftsQuery = fragment.replace(/[\p{P}\p{S}]/gu, " ").split(/\s+/).filter(t => t.length > 0).join(" OR ");
+    if (ftsQuery) {
+      const projectFilter = target.project
+        ? ` AND (m.project = ? OR m.project IS NULL)`
+        : ` AND m.project IS NULL`;
+      const params: string[] = target.project
+        ? [ftsQuery, target.project.toLowerCase()]
+        : [ftsQuery];
+      const rows = db.prepareCached(
+        `SELECT m.legacy_id as id, m.title FROM memory_fts fts JOIN memories m ON m.id = fts.rowid WHERE memory_fts MATCH ?${projectFilter} ORDER BY bm25(memory_fts) LIMIT 3`
+      ).all(...params) as { id: string; title: string }[];
+      const existing = rows.find(r => r.id !== id);
+      if (existing) {
+        logger.warn("memory_update duplicate_detected", { id, similar_id: existing.id });
+        return {
+          content: [{ type: "text", text: `Error: Similar fragment already exists: [${existing.id}] "${existing.title}". Use a different content or update the existing one.` }],
+          isError: true,
+        };
+      }
     }
     logger.debug("memory_update updating_fragment", { id });
-    memory[targetIndex].fragment = fragment;
-    memory[targetIndex].accessed++;
-    memory[targetIndex].relations = (memory[targetIndex].relations || []).filter(
-      (rel: any) => memory.some((f: any) => f.id === rel.id)
-    );
   }
 
   if (confidence !== undefined) {
@@ -787,19 +811,36 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
       };
     }
     logger.debug("memory_update updating_confidence", { id, new_confidence: confidence });
-    memory[targetIndex].confidence = confidence;
   }
 
-  logger.data("memory", "save", { reason: "update_fragment", id });
-  core.saveMemory(memory);
+  const updates: Record<string, unknown> = {};
+  if (title !== undefined) updates.title = title;
+  if (fragment !== undefined) updates.fragment = fragment;
+  if (confidence !== undefined) updates.confidence = confidence;
+
+  const success = core.updateFragmentInDb(id, updates);
+  if (!success) {
+    return {
+      content: [{ type: "text", text: `Error: Failed to update fragment [${id}]` }],
+      isError: true,
+    };
+  }
+
+  if (fragment !== undefined) {
+    const db = getDb();
+    db.prepareCached(
+      "UPDATE memories SET access_count = access_count + 1, updated_at = datetime('now') WHERE legacy_id = ?"
+    ).run(id);
+  }
+
   notifyMemoryChange();
 
-  let updateResponse = `Updated fragment [${id}]: "${memory[targetIndex].title}"`;
+  let updateResponse = `Updated fragment [${id}]: "${title || target.title}"`;
   if (fragment !== undefined) {
     updateResponse += `\nOrphan relations cleaned up after content change.`;
   }
 
-  logger.flow("memory_update", "complete", { id, title: memory[targetIndex].title });
+  logger.flow("memory_update", "complete", { id, title: title || target.title });
   return {
     content: [{ type: "text", text: updateResponse }],
   };
@@ -819,9 +860,7 @@ export async function handleMemoryForget(args?: MemoryForgetArgs): Promise<ToolR
   }
 
   logger.data("memory", "load");
-  const memory: any[] = core.loadMemory();
-  const initialLength = memory.length;
-  const target = memory.find((f: any) => f.id === id);
+  const target = core.getFragmentById(id);
 
   if (!target) {
     logger.warn("memory_forget fragment not_found", { id });
@@ -834,7 +873,7 @@ export async function handleMemoryForget(args?: MemoryForgetArgs): Promise<ToolR
   core.deleteMemory(id);
   guides.removeMemoryFromGuides(id);
 
-  logger.data("memory", "save", { reason: "forget_fragment", id, before: initialLength, after: initialLength - 1 });
+  logger.data("memory", "save", { reason: "forget_fragment", id });
   notifyMemoryChange();
 
   logger.flow("memory_forget", "complete", { id });
@@ -865,10 +904,9 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
   }
 
   logger.data("memory", "load");
-  const memory: any[] = core.loadMemory();
-  const targetIndex = memory.findIndex((f: any) => f.id === id);
+  const target = core.getFragmentById(id);
 
-  if (targetIndex === -1) {
+  if (!target) {
     logger.warn("memory_feedback fragment not_found", { id });
     return {
       content: [{ type: "text", text: `Error: Fragment with ID '${id}' not found` }],
@@ -877,26 +915,28 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
   }
 
   if (useful) {
-    const boosted = core.boostOnAccess(memory[targetIndex]);
-    Object.assign(memory[targetIndex], boosted);
-    memory[targetIndex].positive_feedback = (memory[targetIndex].positive_feedback || 0) + 1;
-    logger.data("memory", "save", { reason: "positive_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
-    core.saveMemory(memory);
+    const boosted = core.boostOnAccess(target);
+    const db = getDb();
+    db.prepareCached(
+      `UPDATE memories SET positive_feedback = COALESCE(positive_feedback, 0) + 1, updated_at = datetime('now') WHERE legacy_id = ?`
+    ).run(id);
+    logger.data("memory", "save", { reason: "positive_feedback", id, new_confidence: boosted.confidence?.toFixed(2) });
     notifyMemoryChange();
-    logger.flow("memory_feedback", "complete_positive", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
+    logger.flow("memory_feedback", "complete_positive", { id, confidence: boosted.confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${memory[targetIndex].confidence.toFixed(2)}.` }],
+      content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${boosted.confidence.toFixed(2)}.` }],
     };
   } else {
-    const penalized = core.recordNegativeHit(memory[targetIndex]);
-    Object.assign(memory[targetIndex], penalized);
-    memory[targetIndex].negative_feedback = (memory[targetIndex].negative_feedback || 0) + 1;
-    logger.data("memory", "save", { reason: "negative_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
-    core.saveMemory(memory);
+    const penalized = core.recordNegativeHit(target);
+    const db = getDb();
+    db.prepareCached(
+      `UPDATE memories SET negative_feedback = COALESCE(negative_feedback, 0) + 1, updated_at = datetime('now') WHERE legacy_id = ?`
+    ).run(id);
+    logger.data("memory", "save", { reason: "negative_feedback", id, new_confidence: penalized.confidence?.toFixed(2) });
     notifyMemoryChange();
-    logger.flow("memory_feedback", "complete_negative", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
+    logger.flow("memory_feedback", "complete_negative", { id, confidence: penalized.confidence?.toFixed(2) });
     return {
-      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${memory[targetIndex].confidence.toFixed(2)}.` }],
+      content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${penalized.confidence.toFixed(2)}.` }],
     };
   }
 }
@@ -933,10 +973,18 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
     };
   }
 
-  logger.data("memory", "load");
-  const memory: any[] = core.loadMemory();
+  const db = getDb();
 
-  const notFound = ids.filter((id: string) => !(memory as any[]).find((f: any) => f.id === id));
+  const sourceFrags: any[] = [];
+  const notFound: string[] = [];
+  for (const id of ids) {
+    const frag = store.getMemoryById(db, id);
+    if (frag) {
+      sourceFrags.push(frag);
+    } else {
+      notFound.push(id);
+    }
+  }
   if (notFound.length > 0) {
     logger.warn("memory_merge fragments not_found", { missing: notFound });
     return {
@@ -945,12 +993,11 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
     };
   }
 
-  const newFragment = core.createFragment(fragment, "ai" as const, title, project);
-  logger.flow("memory_merge", "merged_fragment_created", { new_id: newFragment.id, title });
+  logger.flow("memory_merge", "merged_fragment_created", { title });
 
-  const sourceFrags = ids.map((id: string) => memory.find((f: any) => f.id === id)).filter(Boolean) as any[];
   const inheritedRelations: any[] = [];
   const inheritedGuides: string[] = [];
+  const inheritedAssociated: string[] = [];
   for (const src of sourceFrags) {
     if (src.relations) {
       for (const rel of src.relations) {
@@ -966,82 +1013,95 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
     }
     if (src.associatedWith) {
       for (const assocId of src.associatedWith) {
-        if (!ids.includes(assocId) && !(newFragment.associatedWith || []).includes(assocId)) {
-          if (!newFragment.associatedWith) newFragment.associatedWith = [];
-          newFragment.associatedWith.push(assocId);
-        }
-      }
-    }
-  }
-  newFragment.relations = inheritedRelations;
-  newFragment.related_guides = inheritedGuides;
-
-  const mergedMemory = memory.filter((f: any) => !ids.includes(f.id));
-
-  for (const frag of mergedMemory) {
-    if (frag.associatedWith) {
-      frag.associatedWith = frag.associatedWith.map((aId: string) => ids.includes(aId) ? newFragment.id : aId);
-      frag.associatedWith = [...new Set(frag.associatedWith)];
-    }
-    if (frag.relations) {
-      for (const rel of frag.relations) {
-        if (ids.includes(rel.id)) {
-          rel.id = newFragment.id;
+        if (!ids.includes(assocId) && !inheritedAssociated.includes(assocId)) {
+          inheritedAssociated.push(assocId);
         }
       }
     }
   }
 
-  const allGuides = guides.loadGuides();
-  for (const g of allGuides) {
-    if (g.source_memories) {
-      g.source_memories = g.source_memories.map((mId: string) => ids.includes(mId) ? newFragment.id : mId);
-      g.source_memories = [...new Set(g.source_memories)];
-    }
-    if (g.validated_by) {
-      g.validated_by = g.validated_by.map((mId: string) => ids.includes(mId) ? newFragment.id : mId);
-      g.validated_by = [...new Set(g.validated_by)];
-    }
-  }
-  guides.saveGuides(allGuides);
-
-  memory.push(newFragment);
-  mergedMemory.push(newFragment);
-
-  for (const oldId of ids) {
-    core.deleteMemory(oldId);
+  const numericIds: number[] = [];
+  for (const legacyId of ids) {
+    const row = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(legacyId) as { id: number } | undefined;
+    if (row) numericIds.push(row.id);
   }
 
-  logger.data("memory", "save", { reason: "merge_fragments", new_id: newFragment.id, removed_ids: ids, before: memory.length, after: mergedMemory.length });
-  core.saveMemory(mergedMemory);
+  const newNumericId = store.mergeMemories(db, numericIds, title, fragment);
+  if (!newNumericId) {
+    logger.warn("memory_merge failed", { reason: "mergeMemories returned null" });
+    return {
+      content: [{ type: "text", text: "Error: Failed to merge fragments" }],
+      isError: true,
+    };
+  }
 
-  newFragment.relations = [];
+  const legacyRow = db.prepareCached("SELECT legacy_id FROM memories WHERE id = ?").get(newNumericId) as { legacy_id: string };
+  const newLegacyId = legacyRow.legacy_id;
+
+  const newFragUpdates: Record<string, any> = {};
+  if (project !== undefined) newFragUpdates.project = project;
+  if (inheritedGuides.length > 0) newFragUpdates.related_guides = inheritedGuides;
+  if (inheritedAssociated.length > 0) newFragUpdates.associated_with = inheritedAssociated;
+  if (Object.keys(newFragUpdates).length > 0) {
+    store.updateMemory(db, newLegacyId, newFragUpdates as any);
+  }
+
+  const assocRows = db.prepareCached(
+    `SELECT id, associated_with FROM memories WHERE associated_with IS NOT NULL AND id != ?`
+  ).all(newNumericId) as { id: number; associated_with: string }[];
+  for (const row of assocRows) {
+    const arr: string[] = JSON.parse(row.associated_with);
+    let changed = false;
+    for (let i = 0; i < arr.length; i++) {
+      if (ids.includes(arr[i])) {
+        arr[i] = newLegacyId;
+        changed = true;
+      }
+    }
+    if (changed) {
+      const deduped = [...new Set(arr)];
+      db.prepareCached(
+        `UPDATE memories SET associated_with = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(deduped.length > 0 ? JSON.stringify(deduped) : null, row.id);
+    }
+  }
+
+  for (const oldLegacyId of ids) {
+    const guideRows = db.prepareCached(
+      "SELECT * FROM guides WHERE source_memories LIKE ? OR validated_by LIKE ?"
+    ).all(`%${oldLegacyId}%`, `%${oldLegacyId}%`) as Record<string, any>[];
+    for (const row of guideRows) {
+      const srcMem: string[] = row.source_memories ? JSON.parse(row.source_memories) : [];
+      const valBy: string[] = row.validated_by ? JSON.parse(row.validated_by) : [];
+      if (srcMem.some((mId: string) => ids.includes(mId))) {
+        const updated = [...new Set(srcMem.map((mId: string) => ids.includes(mId) ? newLegacyId : mId))];
+        db.prepareCached("UPDATE guides SET source_memories = ?, updated_at = datetime('now') WHERE id = ?")
+          .run(updated.length > 0 ? JSON.stringify(updated) : null, row.id);
+      }
+      if (valBy.some((mId: string) => ids.includes(mId))) {
+        const updated = [...new Set(valBy.map((mId: string) => ids.includes(mId) ? newLegacyId : mId))];
+        db.prepareCached("UPDATE guides SET validated_by = ?, updated_at = datetime('now') WHERE id = ?")
+          .run(updated.length > 0 ? JSON.stringify(updated) : null, row.id);
+      }
+    }
+  }
 
   for (const rel of inheritedRelations) {
-    core.addRelation(mergedMemory, newFragment.id, rel.id, rel.type, rel.note);
+    store.addRelation(db,
+      (db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(newLegacyId) as { id: number }).id,
+      (db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(rel.id) as { id: number }).id,
+      rel.type,
+      rel.note
+    );
   }
 
-  for (const frag of mergedMemory) {
-    if (frag.id === newFragment.id) continue;
-    if (frag.relations) {
-      const relationsToAdd: any[] = [];
-      for (const rel of frag.relations) {
-        if (rel.id === newFragment.id) {
-          relationsToAdd.push(rel);
-        }
-      }
-      frag.relations = frag.relations.filter((r: any) => r.id !== newFragment.id);
-      for (const rel of relationsToAdd) {
-        core.addRelation(mergedMemory, frag.id, newFragment.id, rel.type, rel.note);
-      }
-    }
-  }
-
-  core.saveMemory(mergedMemory);
   notifyMemoryChange();
 
-  const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
-  let response = `Merged ${ids.length} fragments into [${newFragment.id}]${scopeInfo}: "${newFragment.title}"\nRemoved IDs: ${ids.join(", ")}`;
+  logger.data("memory", "save", { reason: "merge_fragments", new_id: newLegacyId, removed_ids: ids });
+  logger.flow("memory_merge", "complete", { new_id: newLegacyId, merged_count: ids.length });
+
+  const scopeInfo = project ? ` (project: ${project})` : " (global)";
+  let response = `Merged ${ids.length} fragments into [${newLegacyId}]${scopeInfo}: "${title}"\nRemoved IDs: ${ids.join(", ")}`;
 
   if (inheritedRelations.length > 0 || inheritedGuides.length > 0) {
     response += `\n\nINHERITED CONNECTIONS:`;
@@ -1053,7 +1113,6 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
     }
   }
 
-  logger.flow("memory_merge", "complete", { new_id: newFragment.id, merged_count: ids.length });
   return {
     content: [{ type: "text", text: response }],
   };
@@ -1093,9 +1152,11 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
   }
 
   logger.data("memory", "load");
-  const memory = core.loadMemory();
+  const db = getDb();
+  const sourceRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(sourceId) as { id: number } | undefined;
+  const targetRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(targetId) as { id: number } | undefined;
 
-  if (!memory.find((f: any) => f.id === sourceId)) {
+  if (!sourceRow) {
     logger.warn("memory_relate source not_found", { sourceId });
     return {
       content: [{ type: "text", text: `Error: Source fragment [${sourceId}] not found` }],
@@ -1103,7 +1164,7 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
     };
   }
 
-  if (!memory.find((f: any) => f.id === targetId)) {
+  if (!targetRow) {
     logger.warn("memory_relate target not_found", { targetId });
     return {
       content: [{ type: "text", text: `Error: Target fragment [${targetId}] not found` }],
@@ -1111,7 +1172,7 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
     };
   }
 
-  const success = core.addRelation(memory, sourceId, targetId, type as any, note || undefined);
+  const success = store.addRelation(db, sourceRow.id, targetRow.id, type, note || undefined);
   if (!success) {
     logger.warn("memory_relate relation_exists", { sourceId, targetId, type });
     return {
@@ -1121,7 +1182,6 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
   }
 
   logger.data("memory", "save", { reason: "add_relation", sourceId, targetId, type });
-  core.saveMemory(memory);
   notifyMemoryChange();
 
   logger.flow("memory_relate", "complete", { sourceId, targetId, type });
@@ -1137,11 +1197,8 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
 
   logger.flow("guide_get", "start", { category, guide: guideName, task });
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-
   if (task) {
-    const result = guides.suggestGuides(task, allGuides);
+    const result = guides.suggestGuides(task, []);
     logger.flow("guide_get", "task_suggestions", { task, relevant: result.relevant.length, suggested: result.suggested.length });
     const formatted = guides.formatSuggestions(result);
     return {
@@ -1151,7 +1208,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
 
   if (guideName) {
     logger.flow("guide_get", "single_guide_lookup", { guide: guideName });
-    const guide = guides.findGuide(allGuides, guideName);
+    const guide = guides.getGuideFromDb(guideName);
     logger.flow("guide_get", "complete_single", { guide: guideName, found: !!guide });
     return {
       content: [{ type: "text", text: guides.formatGuideDetail(guide) }],
@@ -1159,10 +1216,10 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
   }
 
   const filtered = category
-    ? guides.getGuidesByCategory(allGuides, category)
-    : allGuides;
+    ? guides.getGuidesByCategoryFromDb(category)
+    : guides.loadGuides();
 
-  logger.flow("guide_get", "complete_list", { category, total: allGuides.length, filtered: filtered.length });
+  logger.flow("guide_get", "complete_list", { category, filtered: filtered.length });
   const formatted = guides.formatGuidesForLLM(filtered);
   return {
     content: [{ type: "text", text: formatted }],
@@ -1186,10 +1243,52 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
     };
   }
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-  const preUsageCount = guides.findGuide(allGuides, guideName)?.usage_count || 0;
-  const updated = guides.practiceGuide(allGuides, guideName, category, description, contexts, learnings, args?.outcome);
+  let updated = guides.findSimilarGuideByName(guideName);
+  const preUsageCount = updated?.usage_count || 0;
+
+  if (!updated) {
+    updated = guides.createGuide(guideName, category, description, contexts, learnings);
+    if (args?.outcome === "success") updated.success_count = 1;
+    else if (args?.outcome === "failure") updated.failure_count = 1;
+    const db = getDb();
+    guides.upsertGuideToDb(db, updated);
+  } else {
+    updated.usage_count += 1;
+    updated.last_used = guides.getToday();
+    if (updated.auto_usage_count == null) updated.auto_usage_count = 0;
+
+    if (!updated.description && description) {
+      updated.description = description.trim();
+    }
+
+    const existingContexts = new Set(updated.contexts.map(c => c.toLowerCase()));
+    for (const ctx of contexts) {
+      const normalized = ctx.toLowerCase().trim();
+      if (normalized && !existingContexts.has(normalized)) {
+        updated.contexts.push(normalized);
+        existingContexts.add(normalized);
+      }
+    }
+
+    const existingLearnings = new Set(updated.learnings);
+    for (const learning of learnings) {
+      const trimmed = learning.trim();
+      if (trimmed && !existingLearnings.has(trimmed)) {
+        updated.learnings.push(trimmed);
+        existingLearnings.add(trimmed);
+      }
+    }
+
+    if (args?.outcome === "success") {
+      updated.success_count = (updated.success_count || 0) + 1;
+    } else if (args?.outcome === "failure") {
+      updated.failure_count = (updated.failure_count || 0) + 1;
+    }
+
+    const db = getDb();
+    guides.upsertGuideToDb(db, updated);
+  }
+
   logger.flow("guide_practice", "guide_updated", { guide: guideName, usage_before: preUsageCount, usage_after: updated.usage_count });
 
   if (activeSessionId) {
@@ -1205,21 +1304,22 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
       if (session.memories_read && session.memories_read.length > 0) {
         const normalizedName = guideName.toLowerCase().trim();
         if (!updated.validated_by) updated.validated_by = [];
-        const memory: any[] = core.loadMemory();
         for (const memId of session.memories_read) {
           if (!updated.validated_by.includes(memId)) {
             updated.validated_by.push(memId);
           }
-          const memFrag = memory.find((f: any) => f.id === memId);
+          const memFrag = core.getFragmentById(memId);
           if (memFrag) {
             if (!memFrag.related_guides) memFrag.related_guides = [];
             if (!memFrag.related_guides.includes(normalizedName)) {
               memFrag.related_guides.push(normalizedName);
+              core.updateFragmentInDb(memId, { related_guides: memFrag.related_guides });
             }
           }
         }
-        logger.data("memory", "save", { reason: "practice_validation_links", guide: guideName, memories_linked: session.memories_read.length });
-        core.saveMemory(memory);
+        logger.flow("guide_practice", "practice_validation_links", { guide: guideName, memories_linked: session.memories_read.length });
+        const db = getDb();
+        guides.upsertGuideToDb(db, updated);
       }
 
       logger.data("sessions", "save", { reason: "track_guide_practice", session_id: activeSessionId, guide: guideName });
@@ -1227,20 +1327,17 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
     }
   }
 
-  logger.data("guides", "save", { reason: "practice_guide", guide: guideName });
-  guides.saveGuides(allGuides);
-
   const isNew = updated.usage_count === 1;
   const action = isNew ? "Created" : "Updated";
   let response = `${action} guide "${updated.guide}" (${updated.category}): ${updated.usage_count}x usage, ${updated.learnings.length} learnings, ${updated.contexts.length} contexts`;
 
-  const pCtx = getSessionContext();
   const hookSuggestions: string[] = [];
   const totalAttempts = (updated.success_count || 0) + (updated.failure_count || 0);
   if (totalAttempts >= 3 && (updated.success_count || 0) / totalAttempts < 0.4) {
     hookSuggestions.push(`Guide "${updated.guide}" success rate is ${((updated.success_count || 0) / totalAttempts).toFixed(2)} (${updated.success_count}/${totalAttempts}). Consider guide_update to refine.`);
   }
 
+  const allGuides = guides.loadGuides();
   const practiceSuggestions = intel.checkAfterGuidePractice(updated, allGuides);
   if (practiceSuggestions.length > 0) {
     response += intel.formatSuggestions(practiceSuggestions);
@@ -1271,24 +1368,37 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-  const existing = guides.findSimilarGuide(allGuides, guideName);
+  const existing = guides.getGuideFromDb(guideName);
 
   if (existing) {
     logger.flow("guide_create", "updating_existing", { guide: guideName, existing_id: existing.guide });
     existing.description = description;
     logger.data("guides", "save", { reason: "update_existing_guide", guide: guideName });
-    guides.saveGuides(allGuides);
+    const db = getDb();
+    guides.upsertGuideToDb(db, existing);
     return {
       content: [{ type: "text", text: `Updated manual for existing guide "${existing.guide}" (${existing.category})` }],
     };
   }
 
+  logger.data("guides", "load");
+  const similar = guides.findSimilarGuideByName(guideName);
+
+  if (similar) {
+    logger.flow("guide_create", "updating_existing", { guide: guideName, existing_id: similar.guide });
+    similar.description = description;
+    logger.data("guides", "save", { reason: "update_existing_guide", guide: guideName });
+    const db = getDb();
+    guides.upsertGuideToDb(db, similar);
+    return {
+      content: [{ type: "text", text: `Updated manual for existing guide "${similar.guide}" (${similar.category})` }],
+    };
+  }
+
   const newGuide = guides.createGuide(guideName, category, description, contexts, learnings);
-  allGuides.push(newGuide);
-  logger.data("guides", "save", { reason: "create_new_guide", guide: guideName, total: allGuides.length });
-  guides.saveGuides(allGuides);
+  logger.data("guides", "save", { reason: "create_new_guide", guide: guideName });
+  const db = getDb();
+  guides.upsertGuideToDb(db, newGuide);
 
   logger.flow("guide_create", "complete", { guide: guideName, category, is_new: true });
   return {
@@ -1311,9 +1421,7 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory", "load");
-  const allMemory: any[] = core.loadMemory();
-  const fragment = allMemory.find((m: any) => m.id === memoryId);
+  const fragment = core.getFragmentById(memoryId);
 
   if (!fragment) {
     logger.warn("guide_distill memory not_found", { memory_id: memoryId });
@@ -1325,15 +1433,20 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
 
   logger.flow("guide_distill", "fragment_found", { memory_id: memoryId, title: fragment.title });
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-  const updated = guides.promoteToGuide(
-    allGuides,
-    guideName,
-    category,
-    fragment.fragment,
-    fragment.project || "global"
-  );
+  let updated = guides.getGuideFromDb(guideName);
+  if (!updated) {
+    updated = guides.createGuide(guideName, category, `Created via distillation from memory.`, [(fragment.project || "global").toLowerCase().trim()], [fragment.fragment]);
+  } else {
+    if (!updated.learnings.includes(fragment.fragment)) {
+      updated.learnings.push(fragment.fragment);
+    }
+    const ctx = (fragment.project || "global").toLowerCase().trim();
+    if (ctx && !updated.contexts.includes(ctx)) {
+      updated.contexts.push(ctx);
+    }
+    updated.usage_count += 1;
+    updated.last_used = guides.getToday();
+  }
 
   if (!updated.source_memories) updated.source_memories = [];
   if (!updated.source_memories.includes(memoryId)) {
@@ -1348,9 +1461,13 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
     fragment.distill_candidate = false;
   }
 
-  core.saveMemory(allMemory);
+  core.updateFragmentInDb(memoryId, {
+    related_guides: fragment.related_guides,
+    distill_candidate: false,
+  });
   logger.data("guides", "save", { reason: "distill_memory_to_guide", memory_id: memoryId, guide: guideName });
-  guides.saveGuides(allGuides);
+  const db = getDb();
+  guides.upsertGuideToDb(db, updated);
 
   let response = `Successfully distilled memory [${memoryId}] into guide "${updated.guide}" (${updated.category}).\n\n`;
   response += guides.formatGuideDetail(updated);
@@ -1384,11 +1501,9 @@ export async function handleGuideUpdate(args?: GuideUpdateArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-  const updated = guides.updateGuide(allGuides, guideName, updates);
+  const guide = guides.getGuideFromDb(guideName);
 
-  if (!updated) {
+  if (!guide) {
     logger.warn("guide_update guide not_found", { guide: guideName });
     return {
       content: [{ type: "text", text: `Error: Guide "${guideName}" not found.` }],
@@ -1396,16 +1511,39 @@ export async function handleGuideUpdate(args?: GuideUpdateArgs): Promise<ToolRes
     };
   }
 
+  if (args?.new_name) { guide.guide = args.new_name.toLowerCase().trim(); }
+  if (args?.category) { guide.category = args.category.toLowerCase().trim(); }
+  if (args?.description) { guide.description = args.description.trim(); }
+  if (args?.add_anti_patterns) {
+    guide.anti_patterns = [...(guide.anti_patterns || []), ...args.add_anti_patterns];
+  }
+  if (args?.add_pitfalls) {
+    guide.known_pitfalls = [...(guide.known_pitfalls || []), ...args.add_pitfalls];
+  }
+  if (args?.superseded_by) {
+    guide.superseded_by = args.superseded_by;
+  }
+  if (args?.deprecated === true) {
+    guide.deprecated = true;
+  }
+
+  const db = getDb();
+  if (args?.new_name) {
+    const oldName = guideName.toLowerCase().trim();
+    const newName = args.new_name.toLowerCase().trim();
+    if (oldName !== newName) {
+      db.prepareCached("DELETE FROM guides WHERE guide = ? COLLATE NOCASE").run(oldName);
+    }
+  }
+  guides.upsertGuideToDb(db, guide);
+
   if (args?.new_name && args.new_name.toLowerCase().trim() !== guideName.toLowerCase().trim()) {
     core.renameGuideInMemories(guideName, args.new_name);
   }
 
-  logger.data("guides", "save", { reason: "update_guide", guide: guideName });
-  guides.saveGuides(allGuides);
-
   logger.flow("guide_update", "complete", { guide: guideName, updated_fields: fieldsToUpdate });
   return {
-    content: [{ type: "text", text: `Updated guide "${updated.guide}":\n${guides.formatGuideDetail(updated)}` }],
+    content: [{ type: "text", text: `Updated guide "${guide.guide}":\n${guides.formatGuideDetail(guide)}` }],
   };
 }
 
@@ -1422,11 +1560,9 @@ export async function handleGuideForget(args?: GuideForgetArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides", "load");
-  const allGuides = guides.loadGuides();
-  const success = guides.deleteGuide(allGuides, guideName);
+  const existing = guides.getGuideFromDb(guideName);
 
-  if (!success) {
+  if (!existing) {
     logger.warn("guide_forget guide not_found", { guide: guideName });
     return {
       content: [{ type: "text", text: `Error: Guide "${guideName}" not found.` }],
@@ -1434,10 +1570,10 @@ export async function handleGuideForget(args?: GuideForgetArgs): Promise<ToolRes
     };
   }
 
-  core.removeGuideFromMemories(guideName.toLowerCase().trim());
+  const db = getDb();
+  db.prepareCached("DELETE FROM guides WHERE guide = ? COLLATE NOCASE").run(guideName.toLowerCase().trim());
 
-  logger.data("guides", "save", { reason: "forget_guide", guide: guideName, remaining: allGuides.length });
-  guides.saveGuides(allGuides, { force: true });
+  core.removeGuideFromMemories(guideName.toLowerCase().trim());
 
   logger.flow("guide_forget", "complete", { guide: guideName });
   return {
@@ -1471,13 +1607,10 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
     };
   }
 
-  logger.data("guides", "load");
-  const allGuides: any[] = guides.loadGuides();
-
   const sourceGuides: any[] = [];
   const notFound: string[] = [];
   for (const name of guideNames) {
-    const g = guides.findGuide(allGuides, name);
+    const g = guides.getGuideFromDb(name);
     if (g) {
       sourceGuides.push(g);
     } else {
@@ -1512,7 +1645,6 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
   newGuide.known_pitfalls = pitfalls;
   newGuide.source_memories = [...new Set(sourceGuides.flatMap((g: any) => g.source_memories || []).filter(Boolean))];
   newGuide.validated_by = [...new Set(sourceGuides.flatMap((g: any) => g.validated_by || []).filter(Boolean))];
-  allGuides.push(newGuide);
 
   for (const oldName of guideNames) {
     core.renameGuideInMemories(oldName, newGuideName);
@@ -1522,9 +1654,9 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
     } catch {}
   }
 
-  const mergedGuides = allGuides.filter((g: any) => !guideNames.map((n: string) => n.toLowerCase()).includes(g.guide));
   logger.data("guides", "save", { reason: "merge_guides", new_guide: newGuideName, removed: guideNames, total_usage: totalUsage });
-  guides.saveGuides(mergedGuides);
+  const db = getDb();
+  guides.upsertGuideToDb(db, newGuide);
 
   let response = `Merged ${guideNames.length} guides into "${newGuide.guide}" (${newGuide.category})\n`;
   response += `Total usage: ${totalUsage}x | Contexts: ${contexts.length} | Learnings: ${learnings.length}\n`;
@@ -1551,8 +1683,8 @@ export async function handleMemoryStats(args?: MemoryStatsArgs): Promise<ToolRes
   logger.flow("memory_stats", "start", { project });
 
   logger.data("memory", "load");
-  const memory = core.loadMemory();
-  const stats = core.calculateStats(memory, project);
+  const db = getDb();
+  const stats = store.getMemoryStats(db, project);
 
   logger.flow("memory_stats", "complete", { project, total: stats.total, avg_confidence: stats.avg_confidence?.toFixed(2) });
   return {

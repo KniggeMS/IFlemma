@@ -26,7 +26,15 @@ export {
   findTopicOverlaps,
   deleteMemory,
   removeGuideFromMemories,
-  renameGuideInMemories
+  renameGuideInMemories,
+  addFragmentToDb,
+  updateFragmentInDb,
+  getFragmentById,
+  mergeFragmentsInDb,
+  findSimilarByText,
+  findTopicOverlapsByText,
+  searchMemory,
+  filterByProjectFromDb
 } from "./core.js";
 
 export { scanForSecrets, redactSecrets } from "./privacy.js";

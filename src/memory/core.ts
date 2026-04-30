@@ -298,6 +298,7 @@ export function boostOnAccess(fragment: MemoryFragment, context: string | null =
     store.updateMemory(db, fragment.id, {
       confidence: boosted.confidence,
       context_tags: boosted.tags,
+      access_count: boosted.accessed,
     });
   } catch (err) {
     logger.warn("Failed to write-through boost", { id: fragment.id, error: String(err) });
@@ -679,6 +680,60 @@ export function renameGuideInMemories(oldName: string, newName: string): number 
   }
 }
 
+export function addFragmentToDb(fragment: MemoryFragment): { id: number; legacy_id: string } {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const result = db.prepareCached(
+    `INSERT INTO memories (legacy_id, title, fragment, description, type, project, source, confidence, distill_candidate, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    fragment.id,
+    fragment.title,
+    fragment.fragment,
+    fragment.description || null,
+    fragment.type || "fact",
+    fragment.project || null,
+    fragment.source || "ai",
+    fragment.confidence ?? 0.5,
+    fragment.distill_candidate ? 1 : 0,
+    fragment.created || now,
+    now,
+  );
+  const id = Number(result.lastInsertRowid);
+  return { id, legacy_id: fragment.id };
+}
+
+export function updateFragmentInDb(id: string, updates: {
+  title?: string;
+  fragment?: string;
+  confidence?: number;
+  session_id?: string | null;
+  task_type?: string | null;
+  related_guides?: string[];
+  distill_candidate?: boolean;
+  associated_with?: string[];
+}): boolean {
+  const db = getDb();
+  return store.updateMemory(db, id, updates);
+}
+
+export function getFragmentById(id: string): MemoryFragment | null {
+  const db = getDb();
+  return store.getMemoryById(db, id);
+}
+
+export function mergeFragmentsInDb(ids: string[], _newId: string, title: string, fragment: string, _project: string | null): boolean {
+  const db = getDb();
+  const numericIds: number[] = [];
+  for (const legacyId of ids) {
+    const row = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(legacyId) as { id: number } | undefined;
+    if (row) numericIds.push(row.id);
+  }
+  if (numericIds.length === 0) return false;
+  store.mergeMemories(db, numericIds, title, fragment);
+  return true;
+}
+
 export function deleteMemory(id: string): boolean {
   try {
     const db = getDb();
@@ -760,6 +815,158 @@ export function migrateConfidenceFloor(): number {
 
   logger.flow("migration", "migrated", { count: migrated });
   return migrated;
+}
+
+export function findSimilarByText(text: string, project: string | null, threshold: number = 0.75): MemoryFragment | null {
+  try {
+    const db = getDb();
+    const ftsQuery = text
+      .replace(/[\p{P}\p{S}]/gu, " ")
+      .split(/\s+/)
+      .filter(t => t.length > 0)
+      .join(" OR ");
+
+    if (!ftsQuery) return null;
+
+    let sql: string;
+    let params: any[];
+
+    if (project) {
+      sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+             FROM memory_fts fts
+             JOIN memories m ON m.id = fts.rowid
+             LEFT JOIN memories p ON m.parent_id = p.id
+             WHERE memory_fts MATCH ? AND (m.project = ? OR m.project IS NULL)
+             ORDER BY rank
+             LIMIT 3`;
+      params = [ftsQuery, project.toLowerCase()];
+    } else {
+      sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+             FROM memory_fts fts
+             JOIN memories m ON m.id = fts.rowid
+             LEFT JOIN memories p ON m.parent_id = p.id
+             WHERE memory_fts MATCH ? AND m.project IS NULL
+             ORDER BY rank
+             LIMIT 3`;
+      params = [ftsQuery];
+    }
+
+    const rows = db.prepareCached(sql).all(...params) as Record<string, any>[];
+    if (rows.length > 0) {
+      const ids = rows.map(r => r.id as number);
+      const relRows = db.prepareCached(
+        `SELECT r.source_id, r.type, r.note, r.created_at, m.legacy_id as target_legacy_id
+         FROM relations r JOIN memories m ON m.id = r.target_id
+         WHERE r.source_id IN (${ids.map(() => "?").join(",")})`
+      ).all(...ids) as { source_id: number; target_legacy_id: string; type: string; note: string | null; created_at: string }[];
+
+      const relationsMap = new Map<number, MemoryRelation[]>();
+      for (const rr of relRows) {
+        const list = relationsMap.get(rr.source_id) ?? [];
+        list.push({ id: rr.target_legacy_id, type: rr.type as MemoryRelation["type"], note: rr.note ?? undefined, created: rr.created_at });
+        relationsMap.set(rr.source_id, list);
+      }
+
+      for (const row of rows) {
+        const score = row.rank;
+        const similarity = 1 / (1 + Math.exp(score / 2));
+        if (similarity >= threshold) {
+          const frag = rowToFragment(row, relationsMap.get(row.id) ?? []);
+          logger.flow("dedup", "found_similar", { id: frag.id, similarity });
+          return frag;
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn("findSimilarByText failed", { error: String(err) });
+  }
+
+  try {
+    const queryWords = new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+    if (queryWords.size === 0) return null;
+    const db = getDb();
+    const allRows = (project
+      ? db.prepareCached(`SELECT m.*, p.legacy_id as parent_legacy_id FROM memories m LEFT JOIN memories p ON m.parent_id = p.id WHERE m.project = ? OR m.project IS NULL`).all(project.toLowerCase())
+      : db.prepareCached(`SELECT m.*, p.legacy_id as parent_legacy_id FROM memories m LEFT JOIN memories p ON m.parent_id = p.id WHERE m.project IS NULL`).all()) as Record<string, any>[];
+    let bestFallback: MemoryFragment | null = null;
+    let bestFallbackScore = 0;
+    for (const row of allRows) {
+      const frag = rowToFragment(row, []);
+      const fragWords = new Set(frag.fragment.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+      let overlap = 0;
+      for (const w of queryWords) {
+        if (fragWords.has(w)) overlap++;
+      }
+      const score = overlap / queryWords.size;
+      if (score > bestFallbackScore) {
+        bestFallbackScore = score;
+        bestFallback = frag;
+      }
+    }
+    if (bestFallback && bestFallbackScore >= threshold) {
+      return bestFallback;
+    }
+  } catch (err) {
+    logger.warn("findSimilarByText fallback failed", { error: String(err) });
+  }
+
+  return null;
+}
+
+export function findTopicOverlapsByText(text: string, project: string | null, limit: number = 3): MemoryFragment[] {
+  try {
+    const db = getDb();
+    const results = store.searchMemories(db, text, { project: project || undefined, topK: limit + 5 });
+    const queryWords = new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+    const filtered = results.filter(frag => {
+      if (queryWords.size === 0) return false;
+      const fragWords = new Set(frag.fragment.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+      let intersection = 0;
+      for (const w of queryWords) {
+        if (fragWords.has(w)) intersection++;
+      }
+      const score = intersection / Math.max(queryWords.size, fragWords.size);
+      return score >= 0.25 && score < 0.95;
+    });
+    filtered.sort((a, b) => b.confidence - a.confidence);
+    return filtered.slice(0, limit);
+  } catch (err) {
+    logger.warn("findTopicOverlapsByText failed", { error: String(err) });
+    return [];
+  }
+}
+
+export function searchMemory(query: string, options?: { project?: string | null; limit?: number; type?: string; minConfidence?: number }): MemoryFragment[] {
+  try {
+    const db = getDb();
+    const opts: { project?: string; topK?: number; type?: FragmentType; minConfidence?: number } = {};
+    if (options?.project !== undefined && options.project !== null) {
+      opts.project = options.project;
+    }
+    if (options?.limit !== undefined) {
+      opts.topK = options.limit;
+    }
+    if (options?.type) {
+      opts.type = options.type as FragmentType;
+    }
+    if (options?.minConfidence !== undefined) {
+      opts.minConfidence = options.minConfidence;
+    }
+    return store.searchMemories(db, query, opts);
+  } catch (err) {
+    logger.warn("searchMemory failed", { error: String(err) });
+    return [];
+  }
+}
+
+export function filterByProjectFromDb(project: string | null): MemoryFragment[] {
+  try {
+    const db = getDb();
+    return store.searchMemories(db, "", { project: project || undefined, topK: 1000 });
+  } catch (err) {
+    logger.warn("filterByProjectFromDb failed", { error: String(err) });
+    return [];
+  }
 }
 
 export function filterByProject(fragments: MemoryFragment[], currentProject: string | null): MemoryFragment[] {
