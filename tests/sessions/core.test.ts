@@ -65,7 +65,7 @@ describe("Sessions Core", () => {
       const s1: Session = createSession("debugging");
       const s2: Session = createSession("debugging");
       assert.notEqual(s1.id, s2.id);
-      assert.ok(s1.id.startsWith("t"));
+      assert.ok(s1.id.startsWith("s"));
     });
 
     test("generates unique session IDs", () => {
@@ -107,19 +107,6 @@ describe("Sessions Core", () => {
 
       const loaded: Session[] = loadSessions();
       assert.equal(loaded.length, 1);
-    });
-
-    test("creates cumulative backup", () => {
-      const s1: Session = createSession("first");
-      saveSessions([s1]);
-
-      const s2: Session = createSession("second");
-      saveSessions([s2]);
-
-      const bakPath: string = path.join(TMPDIR, "sessions.jsonl.bak");
-      const bakContent: string = fs.readFileSync(bakPath, "utf-8");
-      const bakEntries: string[] = bakContent.trim().split("\n");
-      assert.equal(bakEntries.length, 2);
     });
   });
 

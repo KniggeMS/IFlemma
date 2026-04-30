@@ -11,74 +11,110 @@ npm install
 ## Commands
 
 ```bash
-npm test            # Run all 488 tests (node --test)
+npm test            # Run all 614 tests (node --test)
 npm run typecheck   # TypeScript type checking
 npm run build       # Compile to dist/
+lemma -lib          # Library Mode (knowledge base snapshot)
 ```
 
 ## Project Structure
 
 ```
 src/
-├── index.ts              # MCP server entry point
+├── index.ts              # CLI entry point (-lib flag handling, server launch)
 ├── types.ts              # Shared TypeScript interfaces
 ├── logger.ts             # Structured logging (daily rotation, ~/.lemma/logs/)
+├── db/
+│   ├── index.ts          # Database initialization + JSONL migration
+│   ├── database.ts       # SQLite connection, statement cache, WAL mode
+│   ├── schema.ts         # Schema definitions + migrations
+│   ├── migration.ts      # Migration runner, JSONL → SQLite migration
+│   ├── memory-store.ts   # Targeted SQL: addMemory, updateMemory, searchMemories, etc.
+│   ├── library-store.ts  # Library Mode: snapshot collection, analysis signals, formatting
+│   └── guides-store.ts   # Guide SQL operations
 ├── memory/
 │   ├── core.ts           # Core memory logic, decay, search, dedup, relations
 │   ├── config.ts         # User configuration loader
-│   ├── embeddings.ts     # HuggingFace embeddings + hybrid search
 │   ├── seed.ts           # Built-in seed knowledge fragments
 │   ├── privacy.ts        # Secret scanning and redaction (17 regex patterns)
 │   └── index.ts          # Barrel exports
 ├── guides/
 │   ├── core.ts           # Guides logic, fuzzy dedup, source_memories, validated_by
-│   └── task-map.ts       # Task-to-guide mapping for suggestions
+│   └── index.ts          # Barrel exports
+├── intelligence/
+│   ├── conflict.ts       # Conflict detection: negation patterns + topic overlap
+│   ├── proactive.ts      # Proactive suggestions: recurring patterns, distill, stale, orphan
+│   ├── session-analytics.ts  # Cross-session project analytics, health scoring
+│   ├── semantic.ts       # TF-IDF vector search + cosine similarity
+│   ├── types.ts          # Shared types (ProactiveSuggestion, ConflictPair, ProjectProgress)
+│   └── index.ts          # Barrel exports
 ├── server/
 │   ├── index.ts          # Server setup, memory injection, notifications, lifecycle
-│   ├── handlers.ts       # 21 tool handlers + response hooks (SUGGESTED ACTIONS)
-│   ├── tools.ts          # MCP tool definitions with Zod schemas
+│   ├── handlers.ts       # 24 tool handlers + intelligence hooks + response hooks
+│   ├── tools.ts          # MCP tool definitions (24 tools)
 │   ├── hooks.ts          # Hook system & prompt modifiers
 │   ├── system-prompt.ts  # Dynamic system prompt generation
-│   └── agents-md.ts      # AGENTS.md file parsing
-└── sessions/
-    ├── core.ts           # Formal session lifecycle (session_start/end)
-    └── virtual.ts        # Virtual session auto-tracking (idle detection)
-
-tests/                    # 488 tests, node:test + tsx
+│   ├── agents-md.ts      # AGENTS.md injection with Lemma system instructions
+│   └── traffic-log.ts    # MCP traffic logging
+├── sessions/
+│   ├── core.ts           # Formal session lifecycle (session_start/end)
+│   └── virtual.ts        # Virtual session auto-tracking (idle detection)
+tests/                    # 614 tests, node:test + tsx
 ├── memory/               # 14 test files
 ├── guides/               # 6 test files
 ├── sessions/             # 2 test files
 ├── server/               # 16 test files
+├── intelligence/         # 4 test files (conflict, proactive, semantic, session-analytics)
+├── db/                   # Database tests
 └── _setup.ts             # Global setup (logger disabled)
 ```
 
 ## Architecture
 
+### Database
+
+All data is stored in a single SQLite database (`~/.lemma/lemma.db`) with WAL mode, statement caching, and FTS5 full-text search. Legacy JSONL files are automatically migrated on first run.
+
+Key tables: `memories`, `guides`, `sessions`, `relations`, `guide_learnings`, `guide_memory_links`, `memory_vectors` (placeholder for future vector search).
+
 ### Memory Injection
 
 Memories are injected into MCP tool descriptions at `tools/list` time:
 
-1. `buildToolsWithMemory()` — Injects full content + summary index + guides into `memory_read` tool description
+1. `buildToolsWithMemory()` — Injects full content + summary index + guides into tool descriptions
 2. `buildDynamicInstructions()` — Builds 3-layer context (rules → memories → guides)
 3. `getDynamicSystemPrompt()` — Dynamic system prompt with project context
 
 All injection paths use `injectionScore()` ranking: `confidence * 0.7 + recency * 0.3`.
+
+### AGENTS.md Injection
+
+When a project is detected, Lemma injects a system prompt into the project's `AGENTS.md` file (between `<!-- lemma:start -->` and `<!-- lemma:end -->` markers). This teaches the LLM:
+- The two-layer knowledge system (memories + guides)
+- The knowledge pipeline (raw → pattern → skill)
+- Mandatory rules (read memory first, save immediately, store in English)
+- Maintenance workflows (update, merge, forget, relate, feedback)
+- Fragment and guide writing guidelines
+- Session management
+
+The injection is idempotent — updating existing content on subsequent starts.
+
+### Intelligence Layer
+
+The `src/intelligence/` module provides autonomous background intelligence:
+
+- **Conflict Detection** (`conflict.ts`): Negation pattern matching + topic overlap scoring. Runs automatically on every `memory_add`. Full scans available via `conflict_scan` tool.
+- **Proactive Suggestions** (`proactive.ts`): Detects recurring patterns, distill candidates, stale memories, low-performing guides. Runs automatically after `memory_add` and `guide_practice`. Full analysis via `proactive_analysis` tool.
+- **Project Analytics** (`session-analytics.ts`): Cross-session health scoring, knowledge growth rate, skill coverage trends. Via `project_analytics` tool.
+- **Semantic Search** (`semantic.ts`): TF-IDF vector space model with cosine similarity. Via `semantic_search` tool.
 
 ### Memory Lifecycle
 
 - **Confidence decay**: Only unused fragments decay (-0.002/session). Accessed fragments are shielded.
 - **Boost on access**: +0.015 confidence, context tagging, association tracking
 - **Negative feedback**: -0.02 confidence
-- **Dedup**: Fuse.js fuzzy matching at 0.65 threshold
-
-### Semantic Search
-
-Embedding model (`Xenova/paraphrase-multilingual-MiniLM-L12-v2`, 384-dim) loaded via `@huggingface/transformers`:
-
-- `initEmbeddings()` — Async model loading, cached at `~/.lemma/models/`
-- `hybridSearch()` — `0.4 * fuseScore + 0.6 * vectorScore` when embeddings ready
-- Falls back to pure Fuse.js when model unavailable
-- `embedFragments()` — Background embedding of stored fragments on first search
+- **Dedup**: FTS5 BM25-based with keyword overlap fallback
+- **Auto-linking**: Co-read memories and topic-overlapping fragments automatically connected
 
 ### Virtual Sessions
 
@@ -89,23 +125,26 @@ Automatic session correlation without explicit `session_start`/`session_end`:
 - 30min absolute timeout (configurable)
 - Tracks tools, technologies, guides, memories
 - Sessions persisted to `~/.lemma/sessions/vs_*.json`
-- LLM-driven synthesis prompt on session end
 
 ### Response Hooks
 
-10 hooks add contextual `SUGGESTED ACTIONS` to tool responses:
+Tool responses include contextual `SUGGESTED ACTIONS`:
 - Topic overlap → `memory_relate`
 - Type `pattern`/`lesson` → `guide_distill`
-- Positive feedback → `guide_distill`
+- Conflict detected → `memory_relate` with `contradicts`
+- Proactive suggestions → distill, merge, refine actions
 - Session end → full review with relate + distill + practice suggestions
 
-### Deterministic Connections
+### CLI: Library Mode (`-lib`)
 
-4 mechanisms for automatic knowledge linking:
-1. `guide_distill` → bidirectional memory ↔ guide link
-2. `guide_practice` → session-read memories validate guide
-3. `trackAssociations` → co-accessed fragments cross-referenced
-4. `memory_merge` → relations, guides, associations inherited
+Running `lemma -lib` initializes the database and outputs a full Library Mode snapshot to stderr, then exits without starting the MCP server. This provides:
+- Complete fragment inventory with confidence, age, access counts
+- Guide summary with success rates
+- Relation graph analysis (orphans, hubs, isolated)
+- Analysis signals (stale, similarity candidates, distill candidates, low-performing guides)
+- Prioritized suggested actions
+
+Useful for periodic maintenance — the LLM reads the snapshot and takes action via normal tools.
 
 ## Data Storage
 
@@ -113,21 +152,18 @@ All data in `~/.lemma/`:
 
 | File | Format | Purpose |
 |------|--------|---------|
-| `memory.jsonl` | JSONL | Memory fragments (semantic layer) |
-| `guides.jsonl` | JSONL | Procedural knowledge (procedural layer) |
-| `sessions.jsonl` | JSONL | Formal session records |
-| `sessions/vs_*.json` | JSON | Virtual session details |
+| `lemma.db` | SQLite | Primary data store (memories, guides, sessions, relations) |
 | `config.json` | JSON | User configuration |
+| `sessions/vs_*.json` | JSON | Virtual session details |
 | `logs/lemma-YYYY-MM-DD.log` | Text | Structured logs (7-day rotation) |
-| `models/` | Binary | Embedding model cache (~470MB) |
-| `*.bak` | JSONL | Cumulative backups |
+| `*.migrated.bak` | JSONL | Backup of migrated legacy data |
 
 ## Testing
 
 Tests use Node.js built-in test runner (`node:test`) with `tsx` for TypeScript:
 
 ```bash
-npm test                                    # All 488 tests
+npm test                                    # All 614 tests
 npm run test:memory                         # Memory tests only
 npm run test:guides                         # Guide tests only
 npm run test:sessions                       # Session tests only
@@ -138,12 +174,12 @@ npm run test:server                         # Server tests only
 
 ## Adding New Features
 
-Lemma follows the principle that tool count stays fixed (21 tools). New capabilities are added as parameters to existing tools. See [ROADMAP.md](./ROADMAP.md) for planned features.
+New tools can be added as needed. The current tool count is 24. See [ROADMAP.md](./ROADMAP.md) for planned features and [HANDLERS-REFACTOR.md](./HANDLERS-REFACTOR.md) for the ongoing targeted SQL migration.
 
 ## Dependencies
 
 | Package | Type | Purpose |
 |---------|------|---------|
 | `@modelcontextprotocol/sdk` | required | MCP protocol |
-| `fuse.js` | required | Fuzzy search, dedup |
-| `@huggingface/transformers` | optional | Embedding model (semantic search) |
+| `better-sqlite3` | required | SQLite database |
+| `sqlite-vec` | required | Vector extension (placeholder for future use) |

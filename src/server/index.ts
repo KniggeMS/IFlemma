@@ -16,6 +16,8 @@ import { TOOLS } from "./tools.js";
 import { handleCallTool, autoStartSession, autoEndSession } from "./handlers.js";
 import { triggerHook, HookTypes } from "./hooks.js";
 import * as core_config from "../memory/config.js";
+import { initDatabase, getDb } from "../db/index.js";
+import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import { setNotifyChange } from "./handlers.js";
 import { logger, initLogger } from "../logger.js";
 import * as traffic from "./traffic-log.js";
@@ -194,15 +196,17 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
       logger.warn(`Tool ${toolName} returned error: ${text}`);
     }
     logger.response("tools/call", !!result.isError, duration, { tool: toolName });
-    try {
-      virtualSession.recordToolCall(
-        toolName,
-        (request.params as any).arguments,
-        result,
-        detectedProject
-      );
-    } catch (e) {
-      console.error(`[Lemma][DEBUG] recordToolCall threw: ${(e as Error).message}`);
+    if (toolName !== "session_end") {
+      try {
+        virtualSession.recordToolCall(
+          toolName,
+          (request.params as any).arguments,
+          result,
+          detectedProject
+        );
+      } catch (e) {
+        console.error(`[Lemma][DEBUG] recordToolCall threw: ${(e as Error).message}`);
+      }
     }
 
     console.error(`[Lemma][DEBUG] tool=${toolName} isError=${!!result.isError} hasContent=${!!result.content?.[0]?.text}`);
@@ -250,6 +254,7 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
 
 async function initializeContext(): Promise<void> {
   initLogger();
+  initDatabase();
   logger.flow("initialize_context", "entry");
 
   const cfg = core_config.loadConfig();
@@ -293,16 +298,6 @@ async function initializeContext(): Promise<void> {
   core.applySessionDecay();
   logger.flow("initialize_context", "decay_applied");
 
-  core.initEmbeddings().then(() => {
-    if (core.isEmbeddingsReady()) {
-      const mem = core.loadMemory();
-      core.backfillEmbeddings(mem, async (m) => { core.saveMemory(m); }).then((count) => {
-        if (count > 0) logger.flow("initialize_context", "backfill_done", { count });
-      }).catch(() => {});
-    }
-  }).catch(() => {});
-  logger.flow("initialize_context", "embeddings_init_started");
-
   detectedProject = core.detectProject();
 
   if (detectedProject) {
@@ -338,6 +333,18 @@ async function initializeContext(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
   logger.flow("initialize_context", "complete");
+}
+
+export async function runLibMode(): Promise<void> {
+  initLogger();
+  initDatabase();
+
+  const db = getDb();
+  const snapshot = collectLibrarySnapshot(db, { project: null, focus: "full" });
+  const formatted = formatLibrarySnapshot(snapshot, "full");
+
+  console.error(formatted);
+  process.exit(0);
 }
 
 export async function startServer(): Promise<void> {
@@ -421,11 +428,3 @@ function gracefulShutdown(signal: string): void {
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-
-const argv1 = process.argv[1];
-if (argv1 && import.meta.url === `file://${argv1.replace(/\\/g, '/')}`) {
-  startServer().catch((error: unknown) => {
-    logger.error("Fatal error on startup", (error as Error).message);
-    process.exit(1);
-  });
-}

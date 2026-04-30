@@ -2,7 +2,7 @@ export type FragmentType = "fact" | "pattern" | "lesson" | "warning" | "context"
 
 export interface MemoryRelation {
   id: string;
-  type: "contradicts" | "supersedes" | "supports" | "related_to";
+  type: "contradicts" | "supersedes" | "superseded_by" | "supports" | "related_to";
   note?: string;
   created: string;
 }
@@ -35,7 +35,6 @@ export interface MemoryFragment {
   type: FragmentType;
   related_guides: string[];
   distill_candidate?: boolean;
-  embedding?: number[];
 }
 
 export interface Guide {
@@ -156,10 +155,6 @@ export interface LemmaConfig {
   virtual_session: {
     timeout_minutes: number;
     idle_timeout_seconds: number;
-  };
-  embeddings: {
-    enabled: boolean;
-    model: string;
   };
 }
 

@@ -1,11 +1,5 @@
-import fs from "fs";
-import path from "path";
-import { logger } from "../logger.js";
-
-const MARKER_START = "<!-- lemma:start -->";
-const MARKER_END = "<!-- lemma:end -->";
-
-const LEMMA_SECTION = `## Lemma — Persistent Memory System
+<!-- lemma:start -->
+## Lemma — Persistent Memory System
 
 <identity>
 You are an AI agent with persistent memory powered by Lemma. Every session starts blank — only tool calls to your memory store carry knowledge forward between conversations. If you discover something and don't save it, it's gone permanently. Your memory is your most valuable asset. Treat it with discipline.
@@ -26,12 +20,11 @@ This is a one-way upgrade path. Not every memory becomes a guide — only patter
 
 <mandatory_rules>
 1. ALWAYS read your memory before starting any task. You may already know the answer.
-2. ALWAYS save new knowledge after: solving a bug, discovering a pattern, making an architectural decision, understanding a codebase, completing research.
+2. ALWAYS save new knowledge after: solving a bug, discovering a pattern, making an architectural decision, understanding a codebase.
 3. NEVER say "I'll remember this" — you won't. Save immediately.
 4. NEVER re-explore codebase for something already in your memory. Check memory first.
 5. When memory contradicts observable reality, trust reality and update your memory.
 6. ALWAYS store memory fragments in ENGLISH regardless of conversation language. Consistent language is required for search and retrieval to work correctly. Translate before saving.
-7. NEVER ask permission to save to memory ("Should I save this?", "Let me know if you want me to remember this"). Just save it. This is not optional — it is your job.
 </mandatory_rules>
 
 <workflow>
@@ -120,77 +113,4 @@ Relations connect your knowledge into a graph. Use them meaningfully:
 
 Relations are bidirectional — the reverse relation is created automatically.
 </relations>
-
-<user_commands>
-When the user sends one of these shorthand commands, execute the corresponding action immediately:
-
-- **-lib** → Call memory_library. This gives a full snapshot of your knowledge base with analysis signals, stale fragments, distill candidates, and suggested actions. After reviewing the snapshot, take maintenance actions as needed (merge, forget, distill, relate).
-</user_commands>`;
-
-export function injectAgentsMd(projectDir: string): { injected: boolean; created: boolean; path: string } {
-  const agentsPath = path.join(projectDir, "AGENTS.md");
-
-  let existing = "";
-  let created = false;
-
-  if (fs.existsSync(agentsPath)) {
-    existing = fs.readFileSync(agentsPath, "utf-8");
-
-    if (existing.includes(MARKER_START)) {
-      const startIdx = existing.indexOf(MARKER_START);
-      const endIdx = existing.indexOf(MARKER_END);
-      if (endIdx > startIdx) {
-        const updated =
-          existing.substring(0, startIdx) +
-          MARKER_START + "\n" + LEMMA_SECTION + "\n" + MARKER_END +
-          existing.substring(endIdx + MARKER_END.length);
-        fs.writeFileSync(agentsPath, updated, "utf-8");
-        logger.flow("agents_md", "updated", { path: agentsPath });
-        return { injected: true, created: false, path: agentsPath };
-      }
-    }
-  } else {
-    created = true;
-  }
-
-  const lemmaBlock = MARKER_START + "\n" + LEMMA_SECTION + "\n" + MARKER_END;
-
-  let content: string;
-  if (existing.length > 0) {
-    content = lemmaBlock + "\n\n" + existing;
-  } else {
-    content = lemmaBlock + "\n";
-  }
-
-  fs.writeFileSync(agentsPath, content, "utf-8");
-  logger.flow("agents_md", created ? "created" : "injected", { path: agentsPath });
-
-  return { injected: true, created, path: agentsPath };
-}
-
-export function removeAgentsMd(projectDir: string): boolean {
-  const agentsPath = path.join(projectDir, "AGENTS.md");
-
-  if (!fs.existsSync(agentsPath)) return false;
-
-  const content = fs.readFileSync(agentsPath, "utf-8");
-  if (!content.includes(MARKER_START)) return false;
-
-  const startIdx = content.indexOf(MARKER_START);
-  const endIdx = content.indexOf(MARKER_END);
-
-  if (endIdx < 0) return false;
-
-  let cleaned = content.substring(0, startIdx) + content.substring(endIdx + MARKER_END.length);
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
-
-  if (cleaned.length === 0) {
-    fs.unlinkSync(agentsPath);
-    logger.flow("agents_md", "removed_empty", { path: agentsPath });
-  } else {
-    fs.writeFileSync(agentsPath, cleaned + "\n", "utf-8");
-    logger.flow("agents_md", "cleaned", { path: agentsPath });
-  }
-
-  return true;
-}
+<!-- lemma:end -->

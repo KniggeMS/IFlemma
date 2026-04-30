@@ -115,7 +115,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: "memory_add",
     description:
-      "MANDATORY: Call this AFTER completing analysis/research to save findings. Synthesize information into short, reusable fragments.\n\nFRAGMENT SCHEMA — always follow this structure:\n## [Topic Title]\n\n### Context\n[1-2 sentences: what and why it matters]\n\n### [Content Section]\n- [Key fact 1]\n- [Key fact 2]\n\n### Rules (optional, for patterns/warnings)\n- [Absolute constraint]\n\nRULES:\n- Title: max 80 chars, start with topic name\n- Fragment: 30-2000 chars, structured markdown, NOT plain prose\n- Every fragment MUST have a ## heading and at least one ### section\n- Type: Choose based on nature:\n  * fact = technical info, API behavior, version details\n  * pattern = repeated solution, best practice, code pattern\n  * lesson = learned from experience, mistake, debugging insight\n  * warning = caution, gotcha, pitfall to avoid\n  * context = environment info, project setup, dependencies\n- Auto-title: If you omit title, first 40 chars of fragment used\n- Auto-description: First sentence extracted from fragment",
+      "MANDATORY: Call this AFTER completing analysis/research to save findings. Synthesize information into short, reusable fragments.\n\nFRAGMENT SCHEMA — always follow this structure:\n## [Topic Title]\n\n### Context\n[1-2 sentences: what and why it matters]\n\n### [Content Section]\n- [Key fact 1]\n- [Key fact 2]\n\n### Rules (optional, for patterns/warnings)\n- [Absolute constraint]\n\nRULES:\n- ALWAYS store fragments in ENGLISH regardless of conversation language. This ensures search and retrieval works correctly.\n- Title: max 80 chars, start with topic name\n- Fragment: 30-2000 chars, structured markdown, NOT plain prose\n- Every fragment MUST have a ## heading and at least one ### section\n- Type: Choose based on nature:\n  * fact = technical info, API behavior, version details\n  * pattern = repeated solution, best practice, code pattern\n  * lesson = learned from experience, mistake, debugging insight\n  * warning = caution, gotcha, pitfall to avoid\n  * context = environment info, project setup, dependencies\n- Auto-title: If you omit title, first 40 chars of fragment used\n- Auto-description: First sentence extracted from fragment",
     inputSchema: {
       type: "object",
       properties: {
@@ -500,6 +500,24 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "memory_library",
+    description: `Library Mode: Analyze and organize your entire memory database. Returns a comprehensive snapshot with all fragments, guides, relations, pre-computed analysis signals (stale, duplicate, orphan detection), and suggested actions. After reviewing the snapshot, use other tools (memory_merge, memory_forget, memory_update, guide_distill, memory_relate) to execute organizational changes.\n\nWHEN TO CALL:\n- Periodically to maintain a clean, well-organized knowledge base\n- When memory feels cluttered or redundant\n- After a long project with many fragments added\n- To find distill candidates that haven't been promoted to guides`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Filter to a specific project. Omit to analyze ALL projects.",
+        },
+        focus: {
+          type: "string",
+          enum: ["full", "stale", "duplicates", "orphans", "distill", "guides"],
+          description: "Focus area. 'full' = complete snapshot (default). Other values return only relevant sections.",
+        },
+      },
+    },
+  },
+  {
     name: "session_stats",
     description: "Get virtual session statistics: recent tool usage patterns, technologies encountered, and memory activity.",
     inputSchema: {
@@ -510,6 +528,67 @@ export const TOOLS: ToolDefinition[] = [
           description: "Number of recent sessions to analyze (default 10)",
         },
       },
+    },
+  },
+  {
+    name: "conflict_scan",
+    description: "Scan memories for contradictions. Detects opposing sentiments, negation conflicts, and contradicting claims across the knowledge base. Returns pairs of conflicting memories with overlap scores.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Filter to a specific project. Omit to scan all memories.",
+        },
+      },
+    },
+  },
+  {
+    name: "proactive_analysis",
+    description: "Run proactive intelligence analysis on the knowledge base. Detects recurring patterns, suggests guide distillation, identifies stale/isolated memories, and recommends cleanup actions. This is the autonomous intelligence layer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Filter to a specific project. Omit to analyze all.",
+        },
+      },
+    },
+  },
+  {
+    name: "project_analytics",
+    description: "Get cross-session analytics for a project. Tracks knowledge growth rate, skill evolution, session outcomes, and overall project health. Shows how the AI's understanding of a project has evolved over time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Project name to analyze. Omit to see all projects overview.",
+        },
+      },
+    },
+  },
+  {
+    name: "semantic_search",
+    description: "Search memories using TF-IDF semantic similarity. Finds related memories even when different words are used. Unlike FTS5 keyword search, this understands topic similarity. Use when keyword search fails to find related knowledge.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The text to find semantically similar memories for.",
+        },
+        project: {
+          type: "string",
+          description: "Filter to a specific project. Omit to search all.",
+        },
+        topK: {
+          type: "number",
+          description: "Maximum results to return (default 10, max 30).",
+        },
+      },
+      required: ["query"],
     },
   },
 ];

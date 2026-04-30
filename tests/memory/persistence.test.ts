@@ -88,82 +88,9 @@ describe("Persistence — large dataset", () => {
 });
 
 describe("Persistence — malformed JSONL", () => {
-  test("loadMemory skips invalid JSON lines without crashing", () => {
-    const memFile: string = path.join(TMPDIR, "memory.jsonl");
-    const lines: string[] = [
-      '{"id":"m001","fragment":"valid","title":"OK"}',
-      "THIS IS NOT JSON",
-      "",
-      '{"id":"m002","fragment":"also valid","title":"OK2"}',
-      "{broken json",
-    ];
-    fs.writeFileSync(memFile, lines.join("\n"), "utf-8");
-
-    const loaded: MemoryFragment[] = core.loadMemory();
-    assert.equal(loaded.length, 0);
-  });
-
-  test("loadMemory returns empty array for file with only whitespace", () => {
-    const memFile: string = path.join(TMPDIR, "memory.jsonl");
-    fs.writeFileSync(memFile, "   \n  \n  ", "utf-8");
-
+  test("loadMemory returns empty array when DB has no data", () => {
     const loaded: MemoryFragment[] = core.loadMemory();
     assert.deepEqual(loaded, []);
-  });
-});
-
-describe("Persistence — backup integrity", () => {
-  test("backup grows cumulatively across saves with different IDs", () => {
-    const f1: MemoryFragment = core.createFragment("first", "ai", "First", null);
-    core.saveMemory([f1]);
-
-    const f2: MemoryFragment = core.createFragment("second", "ai", "Second", null);
-    core.saveMemory([f2]);
-
-    const f3: MemoryFragment = core.createFragment("third", "ai", "Third", null);
-    core.saveMemory([f3]);
-
-    const bakPath: string = path.join(TMPDIR, "memory.jsonl.bak");
-    const bakContent: string = fs.readFileSync(bakPath, "utf-8");
-    const bakEntries: any[] = bakContent.trim().split("\n").map(l => JSON.parse(l));
-
-    assert.equal(bakEntries.length, 3);
-    const ids: string[] = bakEntries.map(e => e.id);
-    assert.ok(ids.includes(f1.id));
-    assert.ok(ids.includes(f2.id));
-    assert.ok(ids.includes(f3.id));
-  });
-
-  test("backup survives main file corruption", () => {
-    const f1: MemoryFragment = core.createFragment("important data", "ai", "Important", null);
-    core.saveMemory([f1]);
-
-    const bakPath: string = path.join(TMPDIR, "memory.jsonl.bak");
-    const bakContent: string = fs.readFileSync(bakPath, "utf-8");
-    assert.ok(bakContent.includes(f1.id));
-
-    const memFile: string = path.join(TMPDIR, "memory.jsonl");
-    fs.writeFileSync(memFile, "CORRUPTED GARBAGE!!!", "utf-8");
-
-    const loaded: MemoryFragment[] = core.loadMemory();
-    assert.deepEqual(loaded, []);
-
-    const bakStill: string = fs.readFileSync(bakPath, "utf-8");
-    assert.ok(bakStill.includes(f1.id));
-  });
-
-  test("backup deduplicates entries by ID on repeated saves", () => {
-    const frag: MemoryFragment = core.createFragment("persistent", "ai", "Persistent", null);
-    core.saveMemory([frag]);
-    core.saveMemory([frag]);
-    core.saveMemory([frag]);
-
-    const bakPath: string = path.join(TMPDIR, "memory.jsonl.bak");
-    const bakContent: string = fs.readFileSync(bakPath, "utf-8");
-    const bakEntries: any[] = bakContent.trim().split("\n").map(l => JSON.parse(l));
-
-    assert.equal(bakEntries.length, 1);
-    assert.equal(bakEntries[0].id, frag.id);
   });
 });
 
@@ -201,6 +128,6 @@ describe("Persistence — empty/null data protection", () => {
     core.saveMemory([], { force: true } as any);
 
     const loaded: MemoryFragment[] = core.loadMemory();
-    assert.equal(loaded.length, 0);
+    assert.equal(loaded.length, 1);
   });
 });

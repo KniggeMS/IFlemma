@@ -17,7 +17,8 @@ export {
   formatSuggestions,
   formatGuideDetail,
   setGuidesDir,
-  TASK_GUIDE_MAP
+  TASK_GUIDE_MAP,
+  removeMemoryFromGuides
 } from "./core.js";
 
 export { seedGuides, getGuideSeedCount } from "./seed.js";

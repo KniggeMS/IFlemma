@@ -6,7 +6,7 @@
 
 [English](README.md) | [Türkçe](docs/README.tr.md)
 
-Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills.
+Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills. An autonomous intelligence layer runs in the background — detecting conflicts, suggesting actions, and auto-linking related knowledge.
 
 ## Quick Start
 
@@ -14,7 +14,8 @@ Add Lemma to your MCP client configuration:
 
 **Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
 **Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**opencode:** `%APPDATA%\opencode\opencode.json`
+**Claude Code (Linux):** `~/.claude.json` or `~/.claude/settings.json`
+**opencode:** `~/.config/opencode/opencode.json` (Linux/macOS) or `%APPDATA%\opencode\opencode.json` (Windows)
 
 ```json
 {
@@ -31,6 +32,14 @@ Add Lemma to your MCP client configuration:
 
 **Requirements:** Node.js 20.0.0 or higher
 
+### CLI Usage
+
+```bash
+lemma -lib    # Library Mode: snapshot of your entire knowledge base
+```
+
+Outputs a full analysis of all memories, guides, relations, stale fragments, distill candidates, and suggested actions. Useful for periodic maintenance and review.
+
 ## How It Works
 
 Memories are injected into tool descriptions via `tools/list`. The LLM starts every session already knowing its most important memories — works on every MCP client.
@@ -42,16 +51,28 @@ Memories are injected into tool descriptions via `tools/list`. The LLM starts ev
 
 **Memory types:** `fact`, `pattern`, `lesson`, `warning`, `context`
 
-**Knowledge pipeline:** Memory (what you know, `memory_add`) ↔ Guide (how you work, `guide_practice`/`guide_distill`)
+**Knowledge pipeline:** Memory (what you know, `memory_add`) → Pattern (`type: "pattern"`) → Guide (how you work, `guide_distill` → `guide_practice`)
 
-## Tools (21)
+**AGENTS.md injection:** Lemma automatically injects a system prompt into your project's `AGENTS.md`, teaching the LLM how to use the memory system effectively. This ensures consistent behavior across all MCP clients.
+
+## Autonomous Intelligence
+
+Lemma runs intelligence in the background — no manual triggering needed:
+
+- **Conflict Detection:** Automatically checks new memories against existing knowledge for contradictions. Reports conflicts with suggestions to resolve.
+- **Proactive Suggestions:** After adding memories or practicing guides, suggests actions like distilling patterns, merging duplicates, or refining low-performing guides.
+- **Auto-linking:** Frequently co-read memories and topic-overlapping fragments are automatically connected with relations.
+
+Manual deep analysis is also available via dedicated tools.
+
+## Tools (24)
 
 ### Memory (11)
 
 | Tool | Purpose |
 |------|---------|
 | `memory_read` | Read/search fragments. Summary mode or full detail by ID |
-| `memory_add` | Save findings. Auto-redacts secrets |
+| `memory_add` | Save findings. Auto-redacts secrets, detects duplicates and conflicts |
 | `memory_update` | Update fragment by ID |
 | `memory_feedback` | Positive/negative feedback, adjusts confidence |
 | `memory_forget` | Delete fragment |
@@ -59,26 +80,36 @@ Memories are injected into tool descriptions via `tools/list`. The LLM starts ev
 | `memory_relate` | Create typed links (`contradicts`, `supersedes`, `supports`, `related_to`) |
 | `memory_stats` | Fragment counts, confidence, project breakdown |
 | `memory_audit` | Integrity check for orphans, duplicates, anomalies |
+| `memory_library` | Full knowledge base snapshot with analysis signals and suggestions |
 
 ### Guides (8)
 
 | Tool | Purpose |
 |------|---------|
 | `guide_get` | Get guides sorted by usage, filter by category or task |
-| `guide_practice` | Record guide usage. Mandatory during work |
-| `guide_create` | Create guide with manual |
+| `guide_practice` | Record guide usage. Auto-creates guide if missing |
+| `guide_create` | Create guide with detailed manual |
 | `guide_distill` | Transform memory → guide learning (bidirectional link) |
-| `guide_update` | Update guide properties |
+| `guide_update` | Update guide properties, anti-patterns, pitfalls |
 | `guide_forget` | Remove guide |
 | `guide_merge` | Merge guides, inherit source memories |
 
-### Sessions (2)
+### Sessions (3)
 
 | Tool | Purpose |
 |------|---------|
 | `session_start` | Start traced session, pre-loads relevant context |
-| `session_end` | End session with review and suggestions |
+| `session_end` | End session with review, auto-linking, and suggestions |
 | `session_stats` | Virtual session statistics |
+
+### Intelligence (4)
+
+| Tool | Purpose |
+|------|---------|
+| `conflict_scan` | Scan all memories for contradictions |
+| `proactive_analysis` | Full knowledge base analysis: stale, orphan, distill, deprecated |
+| `project_analytics` | Cross-session project health, growth rate, skill coverage |
+| `semantic_search` | TF-IDF similarity search across memories |
 
 ## Configuration
 
@@ -109,59 +140,31 @@ Optional config at `~/.lemma/config.json`:
 | **Windows** | `C:\Users\{username}\.lemma\` |
 | **macOS/Linux** | `~/.lemma/` |
 
-Files: `memory.jsonl`, `guides.jsonl`, `config.json`, `sessions/`, `logs/`, `.bak` backups
+Files: `lemma.db` (SQLite), `config.json`, `sessions/`, `logs/`
 
-## Semantic Search
+## Search
 
-Lemma uses **vector-first semantic search** powered by `@huggingface/transformers` (optionalDependency). When active, all search, dedup, and topic overlap detection runs on cosine similarity instead of keyword matching.
-
-**Model:** `Xenova/paraphrase-multilingual-MiniLM-L12-v2`
-- **Size:** ~470 MB (cached at `~/.lemma/models/` after first download)
-- **Dimensions:** 384-dim vectors
-- **Languages:** 50+ languages including Turkish, English, German, French, Spanish, Chinese, Japanese
-- **Why this model:** Optimized for paraphrase detection and cross-lingual similarity. In TR-EN benchmarks, it outperforms `all-MiniLM-L12-v2` by 2-3x on semantic similarity tasks.
+Lemma uses **SQLite FTS5** full-text search for memory lookup, dedup, and topic overlap detection.
 
 **Architecture:**
-- `searchAndSortFragments()` — Pure vector search when model ready, Fuse.js fallback when not
-- `findSimilarFragment()` — Cosine dedup (threshold 0.85) replaces keyword dedup
-- `findTopicOverlaps()` — Cosine range (0.5–0.85) detects related but non-duplicate memories
-- Guide name matching — Always uses Fuse.js (keyword-based, embeddings add no value)
+- `searchAndSortFragments()` — FTS5 full-text search, fallback to in-memory ranking
+- `findSimilarFragment()` — FTS5 BM25-based dedup with keyword overlap fallback
+- `findTopicOverlaps()` — FTS5 search + word overlap scoring for related fragment detection
 
-**Config** (`~/.lemma/config.json`):
-```json
-{
-  "embeddings": {
-    "enabled": true,
-    "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2"
-  }
-}
-```
+## Data Storage
 
-Set `"enabled": false` to disable embeddings and use keyword search only. No restart needed — model loads lazily on first search. Startup auto-backfills any fragments missing vectors.
+All data is stored in a single SQLite database (`~/.lemma/lemma.db`):
 
-### Manual Model Download
+| Table | Purpose |
+|-------|---------|
+| `memories` | Memory fragments (FTS5 + metadata) |
+| `guides` | Procedural knowledge with learnings |
+| `sessions` | Session tracking and outcomes |
+| `relations` | Typed links between memories |
+| `guide_learnings` | Per-guide accumulated learnings |
+| `guide_memory_links` | Bidirectional guide ↔ memory links |
 
-If automatic download fails (slow connection, firewall, etc.), download the model manually:
-
-1. Download from Hugging Face: [Xenova/paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2) 
-2. Extract to the models directory:
-
-| OS | Target Path |
-|---|---|
-| **Windows** | `C:\Users\{username}\.lemma\models\Xenova\paraphrase-multilingual-MiniLM-L12-v2\` |
-| **macOS/Linux** | `~/.lemma/models/Xenova/paraphrase-multilingual-MiniLM-L12-v2/` |
-Final folder structure:
-```
-paraphrase-multilingual-MiniLM-L12-v2/
-├── config.json
-├── tokenizer.json
-├── tokenizer_config.json
-├── special_tokens_map.json
-└── onnx/
-    └── model.onnx
-```
-
-Restart your MCP client after placing the files.
+Legacy JSONL files are automatically migrated on first run.
 
 ## Security
 
@@ -170,6 +173,7 @@ All data is stored locally in `~/.lemma/`. Nothing is sent to external servers. 
 ## Documentation
 
 - [Development Guide](docs/development/DEVELOPMENT.md) — Architecture, project structure, testing
+- [Handlers Refactor](docs/development/HANDLERS-REFACTOR.md) — Targeted SQL migration plan
 - [Roadmap](docs/development/ROADMAP.md) — v0.9, v0.10, v1.0 plans
 - [Research](docs/research/README.md) — Academic papers that influenced Lemma's design
 - [Changelog](CHANGELOG.md) — Version history

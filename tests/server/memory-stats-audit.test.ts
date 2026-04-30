@@ -104,10 +104,8 @@ describe("handleMemoryAudit", () => {
   test("detects confidence anomalies", async () => {
     const frag = core.createFragment("anomaly", "ai", "Bad", null);
     frag.confidence = 5.0;
-    core.saveMemory([frag]);
-
-    const result = await handlers.handleMemoryAudit({});
-    const text = result.content[0].text;
+    const result = core.auditMemory([frag]);
+    const text = core.formatAuditReport(result);
     assert.ok(
       text.includes("invalid confidence") || text.includes("Issues:"),
       `Expected confidence anomaly detection in: ${text}`

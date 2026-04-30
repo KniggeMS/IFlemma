@@ -85,78 +85,21 @@ describe("FragmentType", () => {
     assert.equal(decayed.type, "context");
   });
 
-  test("backward compat: fragment loaded without type field gets undefined", () => {
-    const legacyEntry = {
-      id: "m_legacy0001",
-      title: "Old Fragment",
-      description: "desc",
-      fragment: "old content",
-      project: null,
-      confidence: 0.8,
-      source: "ai",
-      created: "2026-01-01",
-      lastAccessed: "2026-01-01T00:00:00.000Z",
-      accessed: 0,
-      tags: [],
-      associatedWith: [],
-      relations: [],
-      negativeHits: 0,
-      quality_score: null,
-      refinement_count: 0,
-      parent_id: null,
-      child_ids: [],
-      session_id: null,
-      task_type: null,
-      outcome: null,
-      positive_feedback: 0,
-      negative_feedback: 0,
-      last_refined: null,
-    };
-
-    const filePath = path.join(TMPDIR, "memory.jsonl");
-    fs.writeFileSync(filePath, JSON.stringify(legacyEntry) + "\n", "utf-8");
+  test("backward compat: fragment loaded from SQLite always has type field", () => {
+    const frag = core.createFragment("old content", "ai", "Old Fragment");
+    core.saveMemory([frag]);
 
     const loaded = core.loadMemory();
     assert.equal(loaded.length, 1);
-    assert.equal(loaded[0].id, "m_legacy0001");
-    assert.equal(loaded[0].fragment, "old content");
-    assert.equal((loaded[0] as unknown as Record<string, unknown>).type, undefined);
+    assert.equal(loaded[0].type, "fact");
   });
 
-  test("backward compat: fragment loaded without related_guides field gets undefined", () => {
-    const legacyEntry = {
-      id: "m_legacy0002",
-      title: "Old Fragment",
-      description: "desc",
-      fragment: "old content",
-      project: null,
-      confidence: 0.8,
-      source: "ai",
-      created: "2026-01-01",
-      lastAccessed: "2026-01-01T00:00:00.000Z",
-      accessed: 0,
-      tags: [],
-      associatedWith: [],
-      relations: [],
-      negativeHits: 0,
-      quality_score: null,
-      refinement_count: 0,
-      parent_id: null,
-      child_ids: [],
-      session_id: null,
-      task_type: null,
-      outcome: null,
-      positive_feedback: 0,
-      negative_feedback: 0,
-      last_refined: null,
-      type: "fact",
-    };
-
-    const filePath = path.join(TMPDIR, "memory.jsonl");
-    fs.writeFileSync(filePath, JSON.stringify(legacyEntry) + "\n", "utf-8");
+  test("backward compat: fragment loaded from SQLite always has related_guides array", () => {
+    const frag = core.createFragment("old content", "ai", "Old Fragment");
+    core.saveMemory([frag]);
 
     const loaded = core.loadMemory();
     assert.equal(loaded.length, 1);
-    assert.equal((loaded[0] as unknown as Record<string, unknown>).related_guides, undefined);
+    assert.deepEqual(loaded[0].related_guides, []);
   });
 });

@@ -76,19 +76,6 @@ describe("Memory Core", () => {
       assert.equal(loaded.length, 1);
       assert.equal(loaded[0].fragment, "seed");
     });
-
-    test("creates cumulative backup on save", () => {
-      const f1: MemoryFragment = core.createFragment("first", "ai");
-      core.saveMemory([f1]);
-
-      const f2: MemoryFragment = core.createFragment("second", "ai");
-      core.saveMemory([f2]);
-
-      const bakPath = path.join(TMPDIR, "memory.jsonl.bak");
-      const bakContent = fs.readFileSync(bakPath, "utf-8");
-      const bakEntries = bakContent.trim().split("\n");
-      assert.equal(bakEntries.length, 2);
-    });
   });
 
   describe("filterByProject", () => {
@@ -116,6 +103,7 @@ describe("Memory Core", () => {
   describe("findSimilarFragment", () => {
     test("finds similar fragment above threshold", async () => {
       const frags: MemoryFragment[] = [core.createFragment("react hooks use state management patterns", "ai", "React", "proj")];
+      core.saveMemory(frags);
       const match: MemoryFragment | null = await core.findSimilarFragment(frags, "react hooks use state patterns", "proj", 0.3);
       assert.ok(match);
       assert.equal(match!.title, "React");

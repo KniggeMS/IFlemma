@@ -1,10 +1,10 @@
 import os from "os";
 import path from "path";
-import fs from "fs";
 import crypto from "crypto";
-import Fuse from "fuse.js";
 import { TASK_GUIDE_MAP } from "./task-map.js";
 import { logger } from "../logger.js";
+import { getDb, setDataDir } from "../db/database.js";
+import type { LemmaDB } from "../db/database.js";
 import type { Guide, GuideSuggestion, SuggestResult } from "../types.js";
 
 interface GuideUpdates {
@@ -17,12 +17,11 @@ interface GuideUpdates {
   deprecated?: boolean;
 }
 
-let MEMORY_DIR: string = path.join(os.homedir(), ".lemma");
-let GUIDES_FILE: string = path.join(MEMORY_DIR, "guides.jsonl");
+let _guidesDir: string = path.join(os.homedir(), ".lemma");
 
 export function setGuidesDir(dir: string): void {
-  MEMORY_DIR = dir;
-  GUIDES_FILE = path.join(MEMORY_DIR, "guides.jsonl");
+  _guidesDir = dir;
+  setDataDir(dir);
 }
 
 export function generateGuideId(): string {
@@ -31,6 +30,117 @@ export function generateGuideId(): string {
 
 export function getToday(): string {
   return new Date().toISOString().split("T")[0] ?? "";
+}
+
+function parseJsonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToGuide(row: Record<string, unknown>, contexts: string[], learnings: string[]): Guide {
+  return {
+    id: String(row.id),
+    guide: row.guide as string,
+    category: row.category as string,
+    description: (row.description as string) || "",
+    usage_count: (row.usage_count as number) || 0,
+    last_used: (row.last_used_at as string) || "",
+    contexts,
+    learnings,
+    success_count: (row.success_count as number) || 0,
+    failure_count: (row.failure_count as number) || 0,
+    auto_usage_count: 0,
+    anti_patterns: parseJsonArray(row.anti_patterns as string | null),
+    known_pitfalls: parseJsonArray(row.pitfalls as string | null),
+    last_refined: (row.last_refined as string) || null,
+    depends_on: parseJsonArray(row.depends_on as string | null),
+    enables: parseJsonArray(row.enables as string | null),
+    superseded_by: (row.superseded_by as string) || null,
+    deprecated: Boolean(row.deprecated),
+    source_memories: parseJsonArray(row.source_memories as string | null),
+    validated_by: parseJsonArray(row.validated_by as string | null),
+  };
+}
+
+function loadGuideContexts(db: LemmaDB, guideId: number): string[] {
+  const rows = db.prepareCached("SELECT context FROM guide_contexts WHERE guide_id = ?").all(guideId) as { context: string }[];
+  return rows.map(r => r.context);
+}
+
+function loadGuideLearnings(db: LemmaDB, guideId: number): string[] {
+  const rows = db.prepareCached("SELECT learning FROM guide_learnings WHERE guide_id = ?").all(guideId) as { learning: string }[];
+  return rows.map(r => r.learning);
+}
+
+function upsertGuideToDb(db: LemmaDB, g: Guide): void {
+  const now = new Date().toISOString();
+  const existing = db.prepareCached("SELECT id FROM guides WHERE guide = ? COLLATE NOCASE").get(g.guide) as { id: number } | undefined;
+
+  let guideId: number;
+
+  if (existing) {
+    guideId = existing.id;
+    db.prepareCached(`
+      UPDATE guides SET
+        category = ?, description = ?, usage_count = ?, success_count = ?, failure_count = ?,
+        last_used_at = ?, anti_patterns = ?, pitfalls = ?, last_refined = ?,
+        depends_on = ?, enables = ?, superseded_by = ?, deprecated = ?,
+        source_memories = ?, validated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      g.category, g.description, g.usage_count, g.success_count, g.failure_count,
+      g.last_used || now,
+      g.anti_patterns.length > 0 ? JSON.stringify(g.anti_patterns) : null,
+      g.known_pitfalls.length > 0 ? JSON.stringify(g.known_pitfalls) : null,
+      g.last_refined || null,
+      g.depends_on.length > 0 ? JSON.stringify(g.depends_on) : null,
+      g.enables.length > 0 ? JSON.stringify(g.enables) : null,
+      g.superseded_by || null,
+      g.deprecated ? 1 : 0,
+      g.source_memories.length > 0 ? JSON.stringify(g.source_memories) : null,
+      g.validated_by.length > 0 ? JSON.stringify(g.validated_by) : null,
+      now, guideId
+    );
+  } else {
+    const result = db.prepareCached(`
+      INSERT INTO guides (guide, category, description, usage_count, success_count, failure_count,
+        last_used_at, anti_patterns, pitfalls, last_refined, depends_on, enables,
+        superseded_by, deprecated, source_memories, validated_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      g.guide, g.category, g.description, g.usage_count, g.success_count, g.failure_count,
+      g.last_used || now,
+      g.anti_patterns.length > 0 ? JSON.stringify(g.anti_patterns) : null,
+      g.known_pitfalls.length > 0 ? JSON.stringify(g.known_pitfalls) : null,
+      g.last_refined || null,
+      g.depends_on.length > 0 ? JSON.stringify(g.depends_on) : null,
+      g.enables.length > 0 ? JSON.stringify(g.enables) : null,
+      g.superseded_by || null,
+      g.deprecated ? 1 : 0,
+      g.source_memories.length > 0 ? JSON.stringify(g.source_memories) : null,
+      g.validated_by.length > 0 ? JSON.stringify(g.validated_by) : null,
+      now, now
+    );
+    guideId = Number(result.lastInsertRowid);
+    g.id = String(guideId);
+  }
+
+  db.prepareCached("DELETE FROM guide_contexts WHERE guide_id = ?").run(guideId);
+  const insertCtx = db.prepareCached("INSERT OR IGNORE INTO guide_contexts (guide_id, context) VALUES (?, ?)");
+  for (const ctx of g.contexts) {
+    insertCtx.run(guideId, ctx);
+  }
+
+  db.prepareCached("DELETE FROM guide_learnings WHERE guide_id = ?").run(guideId);
+  const insertLearning = db.prepareCached("INSERT OR IGNORE INTO guide_learnings (guide_id, learning) VALUES (?, ?)");
+  for (const learning of g.learnings) {
+    insertLearning.run(guideId, learning);
+  }
 }
 
 export function createGuide(
@@ -68,22 +178,19 @@ export function createGuide(
 }
 
 export function loadGuides(): Guide[] {
-  logger.data("guides.jsonl", "load_start");
+  logger.data("guides", "load_start");
   try {
-    if (!fs.existsSync(GUIDES_FILE)) {
-      logger.data("guides.jsonl", "loaded", { count: 0 });
-      return [];
-    }
-    const content = fs.readFileSync(GUIDES_FILE, "utf-8");
-    if (!content.trim()) {
-      logger.data("guides.jsonl", "loaded", { count: 0 });
-      return [];
-    }
-    const guides = content
-      .trim()
-      .split("\n")
-      .map((line: string) => JSON.parse(line));
-    logger.data("guides.jsonl", "loaded", { count: guides.length });
+    const db = getDb();
+    const rows = db.prepareCached("SELECT * FROM guides ORDER BY usage_count DESC").all() as Record<string, unknown>[];
+
+    const guides = rows.map(row => {
+      const guideId = Number(row.id);
+      const contexts = loadGuideContexts(db, guideId);
+      const learnings = loadGuideLearnings(db, guideId);
+      return rowToGuide(row, contexts, learnings);
+    });
+
+    logger.data("guides", "loaded", { count: guides.length });
     return guides;
   } catch (error: unknown) {
     logger.error("Error loading guides:", { error: (error as Error).message });
@@ -92,43 +199,20 @@ export function loadGuides(): Guide[] {
 }
 
 export function saveGuides(guides: Guide[], options: { force?: boolean } = {}): void {
-  logger.data("guides.jsonl", "save_start", { count: guides?.length ?? 0 });
+  logger.data("guides", "save_start", { count: guides?.length ?? 0 });
   try {
-    const dir = path.dirname(GUIDES_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
     if ((!guides || guides.length === 0) && !options.force) {
       logger.warn("Attempted to save empty guides array - ABORTED to prevent data loss");
       return;
     }
 
-    const jsonl = guides && guides.length > 0 ? guides.map(g => JSON.stringify(g)).join("\n") : "";
+    const db = getDb();
 
-    const backupFile = GUIDES_FILE + ".bak";
-    if (fs.existsSync(backupFile)) {
-      try {
-        const backupContent = fs.readFileSync(backupFile, "utf-8");
-        const backupEntries = backupContent.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
-        const backupIds = new Set(backupEntries.map((e: { id: string }) => e.id));
-        const newEntries = guides.filter(g => !backupIds.has(g.id));
-        if (newEntries.length > 0) {
-          const merged = [...backupEntries, ...newEntries];
-          logger.data("guides.jsonl", "backup_merge", { existing: backupEntries.length, newEntries: newEntries.length, merged: merged.length });
-          fs.writeFileSync(backupFile, merged.map((g: { id: string }) => JSON.stringify(g)).join("\n"), "utf-8");
-        } else {
-          logger.data("guides.jsonl", "backup_unchanged", { existing: backupEntries.length });
-        }
-      } catch {
-        fs.writeFileSync(backupFile, jsonl, "utf-8");
-      }
-    } else {
-      fs.writeFileSync(backupFile, jsonl, "utf-8");
+    for (const g of guides) {
+      upsertGuideToDb(db, g);
     }
 
-    fs.writeFileSync(GUIDES_FILE, jsonl, "utf-8");
-    logger.data("guides.jsonl", "saved", { count: guides?.length ?? 0 });
+    logger.data("guides", "saved", { count: guides?.length ?? 0 });
   } catch (error: unknown) {
     logger.error("Error saving guides:", { error: (error as Error).message });
     throw error;
@@ -184,22 +268,85 @@ export function findSimilarGuide(guides: Guide[], guideName: string): Guide | nu
     return null;
   }
 
-  const fuse = new Fuse<Guide>(guides, {
-    keys: ['guide'],
-    threshold: 0.3,
-    includeScore: true,
-    ignoreLocation: true,
-  });
+  try {
+    const db = getDb();
+    const terms = normalized
+      .split(/\s+/)
+      .filter(t => t.length > 1)
+      .map(t => `${t}*`)
+      .join(" OR ");
 
-  const results = fuse.search(normalized, { limit: 1 });
-  const topResult = results[0];
-  if (topResult && (topResult.score ?? 1) < 0.25) {
-    logger.flow("guide_find", "found", { guideName, method: "fuzzy", score: topResult.score });
-    return topResult.item;
+    if (terms) {
+      const row = db.prepareCached(
+        `SELECT g.* FROM guides_fts fts
+         JOIN guides g ON g.id = fts.rowid
+         WHERE guides_fts MATCH ?
+         ORDER BY rank
+         LIMIT 1`
+      ).get(terms) as Record<string, unknown> | undefined;
+
+      if (row) {
+        const guideId = Number(row.id);
+        const contexts = loadGuideContexts(db, guideId);
+        const learnings = loadGuideLearnings(db, guideId);
+        const matched = rowToGuide(row, contexts, learnings);
+        logger.flow("guide_find", "found", { guideName, method: "fts5" });
+        return matched;
+      }
+    }
+  } catch (error: unknown) {
+    logger.error("FTS5 search failed for similar guide", { error: (error as Error).message });
+  }
+
+  for (const g of guides) {
+    if (g.guide.includes(normalized) || normalized.includes(g.guide)) {
+      logger.flow("guide_find", "found", { guideName, method: "substring" });
+      return g;
+    }
+    if (g.guide.startsWith(normalized) || normalized.startsWith(g.guide)) {
+      logger.flow("guide_find", "found", { guideName, method: "prefix" });
+      return g;
+    }
+  }
+
+  let bestEditDist = Infinity;
+  let bestMatch: Guide | null = null;
+  for (const g of guides) {
+    const dist = levenshtein(normalized, g.guide);
+    if (dist < bestEditDist) {
+      bestEditDist = dist;
+      bestMatch = g;
+    }
+  }
+  if (bestMatch && bestEditDist <= Math.max(2, Math.floor(Math.max(normalized.length, bestMatch.guide.length) * 0.3))) {
+    logger.flow("guide_find", "found", { guideName, method: "levenshtein", distance: bestEditDist });
+    return bestMatch;
   }
 
   logger.flow("guide_find", "not_found", { guideName });
   return null;
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = new Array(n + 1).fill(0) as number[];
+  const curr = new Array(n + 1).fill(0) as number[];
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return curr[n];
 }
 
 export function updateGuide(guides: Guide[], guideName: string, updates: GuideUpdates): Guide | null {
@@ -231,8 +378,62 @@ export function updateGuide(guides: Guide[], guideName: string, updates: GuideUp
     fieldsUpdated.push("deprecated");
   }
 
+  try {
+    const db = getDb();
+    if (updates.guide) {
+      const oldName = guideName.toLowerCase().trim();
+      const newName = updates.guide.toLowerCase().trim();
+      if (oldName !== newName) {
+        db.prepareCached("DELETE FROM guides WHERE guide = ? COLLATE NOCASE").run(oldName);
+      }
+    }
+    upsertGuideToDb(db, guide);
+  } catch (error: unknown) {
+    logger.error("Error writing guide update to DB:", { error: (error as Error).message });
+  }
+
   logger.flow("guide_update", "complete", { guideName, fields: fieldsUpdated });
   return guide;
+}
+
+export function removeMemoryFromGuides(memoryId: string): number {
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT id, guide, source_memories, validated_by FROM guides WHERE source_memories IS NOT NULL OR validated_by IS NOT NULL`
+    ).all() as { id: number; guide: string; source_memories: string | null; validated_by: string | null }[];
+
+    let cleaned = 0;
+    for (const row of rows) {
+      let changed = false;
+      let srcMem: string[] = row.source_memories ? JSON.parse(row.source_memories) : [];
+      let valBy: string[] = row.validated_by ? JSON.parse(row.validated_by) : [];
+
+      const srcBefore = srcMem.length;
+      srcMem = srcMem.filter(id => id !== memoryId);
+      if (srcMem.length !== srcBefore) changed = true;
+
+      const valBefore = valBy.length;
+      valBy = valBy.filter(id => id !== memoryId);
+      if (valBy.length !== valBefore) changed = true;
+
+      if (changed) {
+        db.prepareCached(
+          `UPDATE guides SET source_memories = ?, validated_by = ?, updated_at = datetime('now') WHERE id = ?`
+        ).run(
+          srcMem.length > 0 ? JSON.stringify(srcMem) : null,
+          valBy.length > 0 ? JSON.stringify(valBy) : null,
+          row.id
+        );
+        cleaned++;
+      }
+    }
+    logger.flow("guides", "remove_memory_refs", { memoryId, cleaned });
+    return cleaned;
+  } catch (err) {
+    logger.warn("Failed to remove memory from guides", { memoryId, error: String(err) });
+    return 0;
+  }
 }
 
 export function deleteGuide(guides: Guide[], guideName: string): boolean {
@@ -248,6 +449,14 @@ export function deleteGuide(guides: Guide[], guideName: string): boolean {
 
   guides.length = 0;
   guides.push(...filtered);
+
+  try {
+    const db = getDb();
+    db.prepareCached("DELETE FROM guides WHERE guide = ? COLLATE NOCASE").run(normalized);
+  } catch (error: unknown) {
+    logger.error("Error deleting guide from DB:", { error: (error as Error).message });
+  }
+
   logger.flow("guide_delete", "deleted", { guideName });
   return true;
 }
@@ -268,6 +477,14 @@ export function practiceGuide(
     guide = createGuide(guideName, category, description, newContexts, newLearnings);
     guides.push(guide);
     logger.flow("guide_practice", "created_new", { guide: guideName });
+
+    try {
+      const db = getDb();
+      upsertGuideToDb(db, guide);
+    } catch (error: unknown) {
+      logger.error("Error writing guide practice to DB:", { error: (error as Error).message });
+    }
+
     logger.flow("guide_practice", "complete", { guide: guideName, usageCount: guide.usage_count, learningsCount: guide.learnings.length });
     return guide;
   }
@@ -303,6 +520,13 @@ export function practiceGuide(
     guide.success_count = (guide.success_count || 0) + 1;
   } else if (outcome === "failure") {
     guide.failure_count = (guide.failure_count || 0) + 1;
+  }
+
+  try {
+    const db = getDb();
+    upsertGuideToDb(db, guide);
+  } catch (error: unknown) {
+    logger.error("Error writing guide practice to DB:", { error: (error as Error).message });
   }
 
   logger.flow("guide_practice", "complete", { guide: guideName, usageCount: guide.usage_count, learningsCount: guide.learnings.length });
@@ -371,80 +595,87 @@ export function suggestGuides(taskDescription: string, existingGuides: Guide[] =
   const suggestions: GuideSuggestion[] = [];
   const seen = new Set<string>();
 
-  const fuseOptions = {
-    keys: ['guide', 'keywords', 'contexts', 'learnings', 'description'],
-    threshold: 0.45,
-    distance: 100,
-    minMatchCharLength: 2,
-    includeScore: true,
-    ignoreLocation: true,
-    findAllMatches: true
-  };
-
   const allGuideDefs = Object.values(TASK_GUIDE_MAP).flat().map(def => ({
     ...def,
     keywords: def.keywords || []
   }));
 
-  const staticFuse = new Fuse(allGuideDefs, {
-    ...fuseOptions,
-    keys: ['guide', 'keywords']
-  });
+  const descLower = taskDescription.toLowerCase();
 
-  const staticResults = staticFuse.search(taskDescription, { limit: 20 });
-  logger.flow("guide_suggest", "static_results", { count: staticResults.length });
-
-  for (const result of staticResults) {
-    const guideDef = result.item;
+  for (const guideDef of allGuideDefs) {
     if (seen.has(guideDef.guide)) continue;
-    seen.add(guideDef.guide);
 
-    const existing = existingGuides.find(g => g.guide === guideDef.guide);
-    suggestions.push({
-      ...guideDef,
-      tracked: !!existing,
-      usage_count: existing?.usage_count || 0,
-      last_used: existing?.last_used || null,
-      learnings: existing?.learnings || [],
-      contexts: existing?.contexts || [],
-    });
-  }
+    const guideMatch = descLower.includes(guideDef.guide);
+    const keywordMatch = guideDef.keywords.some(kw => descLower.includes(kw.toLowerCase()));
 
-  if (existingGuides.length > 0) {
-    const trackedFuse = new Fuse(existingGuides, {
-      ...fuseOptions,
-      keys: ['guide', 'contexts', 'learnings', 'description']
-    });
-
-    const trackedResults = trackedFuse.search(taskDescription, { limit: 20 });
-    logger.flow("guide_suggest", "tracked_results", { count: trackedResults.length });
-
-    for (const result of trackedResults) {
-      const existing = result.item;
-      if (seen.has(existing.guide)) continue;
-      seen.add(existing.guide);
-
+    if (guideMatch || keywordMatch) {
+      seen.add(guideDef.guide);
+      const existing = existingGuides.find(g => g.guide === guideDef.guide);
       suggestions.push({
-        guide: existing.guide,
-        category: existing.category,
-        keywords: existing.contexts,
-        tracked: true,
-        usage_count: existing.usage_count,
-        last_used: existing.last_used,
-        learnings: existing.learnings,
-        contexts: existing.contexts,
-        description: existing.description,
+        ...guideDef,
+        tracked: !!existing,
+        usage_count: existing?.usage_count || 0,
+        last_used: existing?.last_used || null,
+        learnings: existing?.learnings || [],
+        contexts: existing?.contexts || [],
       });
     }
   }
 
-  const desc = taskDescription.toLowerCase();
+  if (existingGuides.length > 0) {
+    try {
+      const db = getDb();
+      const terms = descLower
+        .split(/\s+/)
+        .filter(t => t.length > 2)
+        .map(t => `"${t}"`)
+        .join(" OR ");
+
+      if (terms) {
+        const rows = db.prepareCached(
+          `SELECT g.* FROM guides_fts fts
+           JOIN guides g ON g.id = fts.rowid
+           WHERE guides_fts MATCH ?
+           ORDER BY rank
+           LIMIT 20`
+        ).all(terms) as Record<string, unknown>[];
+
+        logger.flow("guide_suggest", "fts_tracked_results", { count: rows.length });
+
+        for (const row of rows) {
+          const guideName = row.guide as string;
+          if (seen.has(guideName)) continue;
+          seen.add(guideName);
+
+          const guideId = Number(row.id);
+          const contexts = loadGuideContexts(db, guideId);
+          const learnings = loadGuideLearnings(db, guideId);
+          const guide = rowToGuide(row, contexts, learnings);
+
+          suggestions.push({
+            guide: guide.guide,
+            category: guide.category,
+            keywords: guide.contexts,
+            tracked: true,
+            usage_count: guide.usage_count,
+            last_used: guide.last_used,
+            learnings: guide.learnings,
+            contexts: guide.contexts,
+            description: guide.description,
+          });
+        }
+      }
+    } catch (error: unknown) {
+      logger.error("FTS5 search failed for guide suggestions", { error: (error as Error).message });
+    }
+  }
+
   for (const existing of existingGuides) {
     if (seen.has(existing.guide)) continue;
 
-    if (hasTokenMatch(desc, existing.guide) ||
-      existing.contexts.some(ctx => hasTokenMatch(desc, ctx)) ||
-      existing.learnings.some(l => hasTokenMatch(desc, l))) {
+    if (hasTokenMatch(descLower, existing.guide) ||
+      existing.contexts.some(ctx => hasTokenMatch(descLower, ctx)) ||
+      existing.learnings.some(l => hasTokenMatch(descLower, l))) {
       seen.add(existing.guide);
       suggestions.push({
         guide: existing.guide,

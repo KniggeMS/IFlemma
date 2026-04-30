@@ -31,9 +31,7 @@ describe("buildInstructions", () => {
     const result = buildInstructions(null);
     assert.ok(typeof result === "string");
     assert.ok(result.length > 0);
-    assert.ok(result.includes("persistent memory"));
-    assert.ok(result.includes("memory_read"));
-    assert.ok(result.includes("memory_add"));
+    assert.ok(result.includes("AGENTS.md"));
   });
 
   test("includes project name when provided", () => {
@@ -87,18 +85,22 @@ describe("buildInstructions", () => {
     assert.ok(tokens <= 600, `Expected <= 600 tokens, got ${tokens}`);
   });
 
-  test("includes mandatory behavior rules", () => {
+  test("includes tool references when memory exists", () => {
+    const frags = [core.createFragment("test fact", "ai", "Test", null)];
+    core.saveMemory(frags);
+
     const result = buildInstructions(null);
     assert.ok(result.includes("memory_read"));
-    assert.ok(result.includes("memory_add"));
-    assert.ok(result.includes("memory_update"));
-    assert.ok(result.includes("MANDATORY") || result.includes("ALWAYS"));
   });
 
-  test("includes workflow summary", () => {
+  test("shows no memories message when empty", () => {
     const result = buildInstructions(null);
-    assert.ok(result.includes("RECALL") || result.includes("memory_read"));
-    assert.ok(result.includes("PERSIST") || result.includes("memory_add"));
+    assert.ok(result.includes("no saved memories") || result.includes("No memories"));
+  });
+
+  test("references AGENTS.md for rules", () => {
+    const result = buildInstructions(null);
+    assert.ok(result.includes("AGENTS.md"));
   });
 });
 

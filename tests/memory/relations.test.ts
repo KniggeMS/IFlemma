@@ -34,8 +34,8 @@ describe("Memory relations", () => {
   });
 
   it("creates reverse relation on target", async () => {
-    const addA = await handleMemoryAdd({ fragment: "Use App Router in Next.js" });
-    const addB = await handleMemoryAdd({ fragment: "Use Pages Router instead" });
+    const addA = await handleMemoryAdd({ fragment: "Kubernetes pod autoscaling based on CPU utilization metrics" });
+    const addB = await handleMemoryAdd({ fragment: "Docker container networking bridge overlay configurations" });
     const idA = addA.content[0].text.match(/\[([^\]]+)\]/)?.[1];
     const idB = addB.content[0].text.match(/\[([^\]]+)\]/)?.[1];
 

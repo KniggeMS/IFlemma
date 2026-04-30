@@ -23,11 +23,13 @@ export {
   formatStats,
   auditMemory,
   formatAuditReport,
-  findTopicOverlaps
+  findTopicOverlaps,
+  deleteMemory,
+  removeGuideFromMemories,
+  renameGuideInMemories
 } from "./core.js";
 
 export { scanForSecrets, redactSecrets } from "./privacy.js";
 
 export { seedMemory, getSeedCount, getSeedIds } from "./seed.js";
 
-export { initEmbeddings, isEmbeddingsReady, embed, cosineSimilarity, searchByVector, vectorSearch, embedFragment, backfillEmbeddings } from "./embeddings.js";

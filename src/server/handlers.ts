@@ -3,7 +3,10 @@ import * as guides from "../guides/index.js";
 import * as sessions from "../sessions/index.js";
 import * as virtualSession from "../sessions/virtual.js";
 import { logger } from "../logger.js";
-import { isEmbeddingsReady, embed } from "../memory/embeddings.js";
+import { getDb } from "../db/database.js";
+
+import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
+import * as intel from "../intelligence/index.js";
 import type { FragmentType } from "../types.js";
 
 interface ToolResult {
@@ -136,6 +139,11 @@ interface SessionStatsArgs {
   count?: number;
 }
 
+interface MemoryLibraryArgs {
+  project?: string | null;
+  focus?: "full" | "stale" | "duplicates" | "orphans" | "distill" | "guides";
+}
+
 interface ToolCallRequest {
   params: {
     name: string;
@@ -191,7 +199,11 @@ export function autoEndSession(vs: any): void {
   const guidesUsed = vs.guides_used || [];
   const project = vs.project || null;
 
-  sessions.endSession(session, "success", null, []);
+  const outcome = memCreated.length > 0 || toolCount > 0
+    ? "partial"
+    : "abandoned";
+
+  sessions.endSession(session, outcome, null, []);
   sessions.saveSessions(allSessions);
   activeSessionId = null;
 
@@ -246,7 +258,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
     };
   }
 
-  logger.data("sessions.json", "load");
+  logger.data("sessions", "load");
   const allSessions = sessions.loadSessions();
   const existing = sessions.findActiveSession(allSessions);
   if (existing) {
@@ -259,10 +271,10 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   session.initial_approach = initialApproach;
   activeSessionId = session.session_id;
   allSessions.push(session);
-  logger.data("sessions.json", "save", { session_id: session.session_id, total_sessions: allSessions.length });
+  logger.data("sessions", "save", { session_id: session.session_id, total_sessions: allSessions.length });
   sessions.saveSessions(allSessions);
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const taskDesc = [taskType, ...technologies].join(" ");
   const suggestions = guides.suggestGuides(taskDesc, allGuides);
@@ -270,7 +282,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
 
   const formattedSuggestions = guides.formatSuggestions(suggestions);
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const allMemory = core.loadMemory();
   const projectMemory = core.filterByProject(allMemory, core.detectProject());
   const relevantResults = await core.searchAndSortFragments(projectMemory, taskDesc, 3);
@@ -280,7 +292,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
     const boosted = core.boostOnAccess(frag);
     Object.assign(frag, boosted);
   }
-  logger.data("memory.json", "save", { reason: "boost_preloaded", boosted_count: relevantResults.length });
+  logger.data("memory", "save", { reason: "boost_preloaded", boosted_count: relevantResults.length });
   core.saveMemory(allMemory);
 
   let response = `Session started: ${session.session_id} (${taskType})\n`;
@@ -320,7 +332,7 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
     };
   }
 
-  logger.data("sessions.json", "load");
+  logger.data("sessions", "load");
   const allSessions = sessions.loadSessions();
   const session = activeSessionId
     ? sessions.findSession(allSessions, activeSessionId)
@@ -338,7 +350,7 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
 
   sessions.endSession(session, outcome, finalApproach, lessons);
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const improvementLines: string[] = [];
 
@@ -362,11 +374,11 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
         }
       }
     }
-    logger.data("guides.json", "save", { reason: "guide_success_tracking", guides_updated: session.guides_used.length });
+    logger.data("guides", "save", { reason: "guide_success_tracking", guides_updated: session.guides_used.length });
     guides.saveGuides(allGuides);
   }
 
-  logger.data("sessions.json", "save", { session_id: session.session_id, outcome });
+  logger.data("sessions", "save", { session_id: session.session_id, outcome });
   sessions.saveSessions(allSessions);
   activeSessionId = null;
 
@@ -457,7 +469,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   logger.flow("memory_read", "start", { project: currentProject, query, id: detailId, ids: args?.ids?.length, all: showAll, context });
 
   let memory: any[] = core.loadMemory();
-  logger.data("memory.json", "load", { total_fragments: memory.length });
+  logger.data("memory", "load", { total_fragments: memory.length });
 
   const detailIds = args?.ids || null;
   if (detailIds && Array.isArray(detailIds) && detailIds.length > 0) {
@@ -474,7 +486,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
         results.push(`Fragment [${did}] not found.`);
       }
     }
-    logger.data("memory.json", "save", { reason: "boost_batch_ids", count: detailIds.length });
+    logger.data("memory", "save", { reason: "boost_batch_ids", count: detailIds.length });
     core.saveMemory(memory);
     notifyMemoryChange();
     logger.flow("memory_read", "complete_batch", { ids_requested: detailIds.length });
@@ -495,7 +507,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     }
     const boosted = core.boostOnAccess(fragment, context);
     Object.assign(fragment, boosted);
-    logger.data("memory.json", "save", { reason: "boost_single", id: detailId });
+    logger.data("memory", "save", { reason: "boost_single", id: detailId });
     core.saveMemory(memory);
     notifyMemoryChange();
 
@@ -549,13 +561,16 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
 
   const scopeInfo = showAll ? "all projects" : currentProject || "global";
   const formatted = core.formatMemoryForLLM(results, scopeInfo);
-  logger.data("memory.json", "save", { reason: "boost_search_results", boosted_count: resultIds.size, auto_relate_count: autoRelateCount });
+  logger.data("memory", "save", { reason: "boost_search_results", boosted_count: resultIds.size, auto_relate_count: autoRelateCount });
   core.saveMemory(memory);
   notifyMemoryChange();
 
   let hookResponse = formatted;
   if (autoRelateCount > 0) {
     hookResponse += `\nAuto-linked ${autoRelateCount} co-read fragments with related_to relations.`;
+  }
+  if (!query && !detailId && (results as any[]).length < memory.length) {
+    hookResponse += `\nShowing top ${(results as any[]).length} of ${memory.length} fragments (ranked by relevance). Use query parameter to search, or id for a specific fragment.`;
   }
 
   logger.flow("memory_read", "complete_search", { query, results: (results as any[]).length, scope: scopeInfo });
@@ -585,7 +600,7 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory: any[] = core.loadMemory();
 
   const similarMatch = await core.findSimilarFragment(memory, fragment, project);
@@ -603,8 +618,13 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   logger.flow("memory_add", "secret_detection", { confirm: args?.confirm });
   const { redacted, found } = core.redactSecrets(fragment);
   const hasSecrets = found.length > 0;
-  const finalFragment = hasSecrets && !args?.confirm ? redacted : fragment;
+  const neverConfirmTypes = ["Private key", "OpenAI API key", "OpenAI project key", "GitHub token", "AWS access key"];
+  const hasCriticalSecrets = found.some(f => neverConfirmTypes.includes(f.type));
+  const finalFragment = hasSecrets && (!args?.confirm || hasCriticalSecrets) ? redacted : fragment;
 
+  if (hasCriticalSecrets && args?.confirm) {
+    logger.warn("memory_add critical_secret_blocked", { secret_types: found.filter(f => neverConfirmTypes.includes(f.type)).map(f => f.type) });
+  }
   if (hasSecrets) {
     logger.warn("memory_add secrets_detected", { secret_types: found.map(f => f.type), confirmed: !!args?.confirm });
   }
@@ -616,8 +636,13 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
     newFragment.distill_candidate = true;
   }
 
+  memory.push(newFragment);
+  logger.data("memory", "save", { reason: "add_fragment", id: newFragment.id, total: memory.length });
+
+  core.saveMemory(memory);
+
   if (activeSessionId) {
-    logger.data("sessions.json", "load");
+    logger.data("sessions", "load");
     const allSessions = sessions.loadSessions();
     const session = sessions.findSession(allSessions, activeSessionId);
     if (session) {
@@ -626,33 +651,14 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
       newFragment.task_type = session.task_type;
       session.memories_created = session.memories_created || [];
       session.memories_created.push(newFragment.id);
-      logger.data("sessions.json", "save", { reason: "link_memory", session_id: activeSessionId });
+      core.saveMemory(memory);
+      logger.data("sessions", "save", { reason: "link_memory", session_id: activeSessionId });
       sessions.saveSessions(allSessions);
     }
   }
-  memory.push(newFragment);
-  logger.data("memory.json", "save", { reason: "add_fragment", id: newFragment.id, total: memory.length });
 
-  if (isEmbeddingsReady()) {
-    try {
-      const vector = await embed(`${newFragment.title} ${newFragment.fragment}`);
-      if (vector) {
-        newFragment.embedding = vector;
-        logger.flow("memory_add", "embedded", { id: newFragment.id });
-      }
-    } catch {}
-  }
-
-  core.saveMemory(memory);
-  notifyMemoryChange();
-
-  if (core.isEmbeddingsReady()) {
-    core.embedFragment(newFragment).then((did) => {
-      if (did) core.saveMemory(memory);
-    }).catch(() => {});
-  }
-
-  const overlaps = await core.findTopicOverlaps(memory, finalFragment, project, 5);
+  const overlaps = (await core.findTopicOverlaps(memory, finalFragment, project, 5))
+    .filter(o => o.id !== newFragment.id);
   logger.flow("memory_add", "overlap_check", { overlap_count: overlaps.length });
 
   const scopeInfo = newFragment.project ? ` (project: ${newFragment.project})` : " (global)";
@@ -688,6 +694,18 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   if (fragmentType === "pattern" || fragmentType === "lesson") {
     hookSuggestions.push(`This is a ${fragmentType}. Consider guide_distill to promote it into a reusable skill.`);
   }
+
+  const conflicts = intel.detectConflict(newFragment, memory.filter((f: any) => f.id !== newFragment.id));
+  if (conflicts.length > 0) {
+    hookSuggestions.push(`CONFLICT: ${conflicts.length} potentially contradicting memory(ies) detected: ${conflicts.map(c => `[${c.memory_b_id}] "${c.memory_b_title}"`).join(", ")}. Use memory_relate with type "contradicts" to link.`);
+  }
+
+  const allGuides = guides.loadGuides();
+  const proactiveSuggestions = intel.checkAfterMemoryAdd(newFragment, memory, allGuides);
+  if (proactiveSuggestions.length > 0) {
+    response += intel.formatSuggestions(proactiveSuggestions);
+  }
+
   response += buildHookBlock(hookSuggestions);
 
   logger.flow("memory_add", "complete", { id: newFragment.id, title: newFragment.title, overlaps: overlaps.length });
@@ -712,7 +730,7 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory: any[] = core.loadMemory();
   const targetIndex = memory.findIndex((f: any) => f.id === id);
 
@@ -744,13 +762,20 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
         isError: true,
       };
     }
+    const similar = await core.findSimilarFragment(memory, fragment, memory[targetIndex].project || null);
+    if (similar && similar.id !== id) {
+      logger.warn("memory_update duplicate_detected", { id, similar_id: similar.id });
+      return {
+        content: [{ type: "text", text: `Error: Similar fragment already exists: [${similar.id}] "${similar.title}". Use a different content or update the existing one.` }],
+        isError: true,
+      };
+    }
     logger.debug("memory_update updating_fragment", { id });
     memory[targetIndex].fragment = fragment;
     memory[targetIndex].accessed++;
     memory[targetIndex].relations = (memory[targetIndex].relations || []).filter(
       (rel: any) => memory.some((f: any) => f.id === rel.id)
     );
-    memory[targetIndex].embedding = undefined;
   }
 
   if (confidence !== undefined) {
@@ -765,17 +790,7 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
     memory[targetIndex].confidence = confidence;
   }
 
-  if (isEmbeddingsReady() && memory[targetIndex].embedding === undefined && (fragment !== undefined || title !== undefined)) {
-    try {
-      const vector = await embed(`${memory[targetIndex].title} ${memory[targetIndex].fragment}`);
-      if (vector) {
-        memory[targetIndex].embedding = vector;
-        logger.flow("memory_update", "re_embedded", { id });
-      }
-    } catch {}
-  }
-
-  logger.data("memory.json", "save", { reason: "update_fragment", id });
+  logger.data("memory", "save", { reason: "update_fragment", id });
   core.saveMemory(memory);
   notifyMemoryChange();
 
@@ -803,12 +818,12 @@ export async function handleMemoryForget(args?: MemoryForgetArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory: any[] = core.loadMemory();
   const initialLength = memory.length;
-  const filtered = memory.filter((f: any) => f.id !== id);
+  const target = memory.find((f: any) => f.id === id);
 
-  if (filtered.length === initialLength) {
+  if (!target) {
     logger.warn("memory_forget fragment not_found", { id });
     return {
       content: [{ type: "text", text: `Error: Fragment with ID '${id}' not found` }],
@@ -816,8 +831,10 @@ export async function handleMemoryForget(args?: MemoryForgetArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "save", { reason: "forget_fragment", id, before: initialLength, after: filtered.length });
-  core.saveMemory(filtered, { force: true });
+  core.deleteMemory(id);
+  guides.removeMemoryFromGuides(id);
+
+  logger.data("memory", "save", { reason: "forget_fragment", id, before: initialLength, after: initialLength - 1 });
   notifyMemoryChange();
 
   logger.flow("memory_forget", "complete", { id });
@@ -847,7 +864,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory: any[] = core.loadMemory();
   const targetIndex = memory.findIndex((f: any) => f.id === id);
 
@@ -863,7 +880,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     const boosted = core.boostOnAccess(memory[targetIndex]);
     Object.assign(memory[targetIndex], boosted);
     memory[targetIndex].positive_feedback = (memory[targetIndex].positive_feedback || 0) + 1;
-    logger.data("memory.json", "save", { reason: "positive_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
+    logger.data("memory", "save", { reason: "positive_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
     core.saveMemory(memory);
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_positive", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
@@ -874,7 +891,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     const penalized = core.recordNegativeHit(memory[targetIndex]);
     Object.assign(memory[targetIndex], penalized);
     memory[targetIndex].negative_feedback = (memory[targetIndex].negative_feedback || 0) + 1;
-    logger.data("memory.json", "save", { reason: "negative_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
+    logger.data("memory", "save", { reason: "negative_feedback", id, new_confidence: memory[targetIndex].confidence?.toFixed(2) });
     core.saveMemory(memory);
     notifyMemoryChange();
     logger.flow("memory_feedback", "complete_negative", { id, confidence: memory[targetIndex].confidence?.toFixed(2) });
@@ -916,7 +933,7 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory: any[] = core.loadMemory();
 
   const notFound = ids.filter((id: string) => !(memory as any[]).find((f: any) => f.id === id));
@@ -991,7 +1008,35 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
   memory.push(newFragment);
   mergedMemory.push(newFragment);
 
-  logger.data("memory.json", "save", { reason: "merge_fragments", new_id: newFragment.id, removed_ids: ids, before: memory.length, after: mergedMemory.length });
+  for (const oldId of ids) {
+    core.deleteMemory(oldId);
+  }
+
+  logger.data("memory", "save", { reason: "merge_fragments", new_id: newFragment.id, removed_ids: ids, before: memory.length, after: mergedMemory.length });
+  core.saveMemory(mergedMemory);
+
+  newFragment.relations = [];
+
+  for (const rel of inheritedRelations) {
+    core.addRelation(mergedMemory, newFragment.id, rel.id, rel.type, rel.note);
+  }
+
+  for (const frag of mergedMemory) {
+    if (frag.id === newFragment.id) continue;
+    if (frag.relations) {
+      const relationsToAdd: any[] = [];
+      for (const rel of frag.relations) {
+        if (rel.id === newFragment.id) {
+          relationsToAdd.push(rel);
+        }
+      }
+      frag.relations = frag.relations.filter((r: any) => r.id !== newFragment.id);
+      for (const rel of relationsToAdd) {
+        core.addRelation(mergedMemory, frag.id, newFragment.id, rel.type, rel.note);
+      }
+    }
+  }
+
   core.saveMemory(mergedMemory);
   notifyMemoryChange();
 
@@ -1047,7 +1092,7 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory = core.loadMemory();
 
   if (!memory.find((f: any) => f.id === sourceId)) {
@@ -1075,7 +1120,7 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "save", { reason: "add_relation", sourceId, targetId, type });
+  logger.data("memory", "save", { reason: "add_relation", sourceId, targetId, type });
   core.saveMemory(memory);
   notifyMemoryChange();
 
@@ -1092,7 +1137,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
 
   logger.flow("guide_get", "start", { category, guide: guideName, task });
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
 
   if (task) {
@@ -1141,14 +1186,14 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
     };
   }
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const preUsageCount = guides.findGuide(allGuides, guideName)?.usage_count || 0;
   const updated = guides.practiceGuide(allGuides, guideName, category, description, contexts, learnings, args?.outcome);
   logger.flow("guide_practice", "guide_updated", { guide: guideName, usage_before: preUsageCount, usage_after: updated.usage_count });
 
   if (activeSessionId) {
-    logger.data("sessions.json", "load");
+    logger.data("sessions", "load");
     const allSessions = sessions.loadSessions();
     const session = sessions.findSession(allSessions, activeSessionId);
     if (session) {
@@ -1173,16 +1218,16 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
             }
           }
         }
-        logger.data("memory.json", "save", { reason: "practice_validation_links", guide: guideName, memories_linked: session.memories_read.length });
+        logger.data("memory", "save", { reason: "practice_validation_links", guide: guideName, memories_linked: session.memories_read.length });
         core.saveMemory(memory);
       }
 
-      logger.data("sessions.json", "save", { reason: "track_guide_practice", session_id: activeSessionId, guide: guideName });
+      logger.data("sessions", "save", { reason: "track_guide_practice", session_id: activeSessionId, guide: guideName });
       sessions.saveSessions(allSessions);
     }
   }
 
-  logger.data("guides.json", "save", { reason: "practice_guide", guide: guideName });
+  logger.data("guides", "save", { reason: "practice_guide", guide: guideName });
   guides.saveGuides(allGuides);
 
   const isNew = updated.usage_count === 1;
@@ -1195,6 +1240,12 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
   if (totalAttempts >= 3 && (updated.success_count || 0) / totalAttempts < 0.4) {
     hookSuggestions.push(`Guide "${updated.guide}" success rate is ${((updated.success_count || 0) / totalAttempts).toFixed(2)} (${updated.success_count}/${totalAttempts}). Consider guide_update to refine.`);
   }
+
+  const practiceSuggestions = intel.checkAfterGuidePractice(updated, allGuides);
+  if (practiceSuggestions.length > 0) {
+    response += intel.formatSuggestions(practiceSuggestions);
+  }
+
   response += buildHookBlock(hookSuggestions);
 
   logger.flow("guide_practice", "complete", { guide: guideName, action, usage_count: updated.usage_count });
@@ -1220,14 +1271,14 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const existing = guides.findSimilarGuide(allGuides, guideName);
 
   if (existing) {
     logger.flow("guide_create", "updating_existing", { guide: guideName, existing_id: existing.guide });
     existing.description = description;
-    logger.data("guides.json", "save", { reason: "update_existing_guide", guide: guideName });
+    logger.data("guides", "save", { reason: "update_existing_guide", guide: guideName });
     guides.saveGuides(allGuides);
     return {
       content: [{ type: "text", text: `Updated manual for existing guide "${existing.guide}" (${existing.category})` }],
@@ -1236,7 +1287,7 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
 
   const newGuide = guides.createGuide(guideName, category, description, contexts, learnings);
   allGuides.push(newGuide);
-  logger.data("guides.json", "save", { reason: "create_new_guide", guide: guideName, total: allGuides.length });
+  logger.data("guides", "save", { reason: "create_new_guide", guide: guideName, total: allGuides.length });
   guides.saveGuides(allGuides);
 
   logger.flow("guide_create", "complete", { guide: guideName, category, is_new: true });
@@ -1260,7 +1311,7 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
     };
   }
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const allMemory: any[] = core.loadMemory();
   const fragment = allMemory.find((m: any) => m.id === memoryId);
 
@@ -1274,7 +1325,7 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
 
   logger.flow("guide_distill", "fragment_found", { memory_id: memoryId, title: fragment.title });
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const updated = guides.promoteToGuide(
     allGuides,
@@ -1298,7 +1349,7 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
   }
 
   core.saveMemory(allMemory);
-  logger.data("guides.json", "save", { reason: "distill_memory_to_guide", memory_id: memoryId, guide: guideName });
+  logger.data("guides", "save", { reason: "distill_memory_to_guide", memory_id: memoryId, guide: guideName });
   guides.saveGuides(allGuides);
 
   let response = `Successfully distilled memory [${memoryId}] into guide "${updated.guide}" (${updated.category}).\n\n`;
@@ -1333,7 +1384,7 @@ export async function handleGuideUpdate(args?: GuideUpdateArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const updated = guides.updateGuide(allGuides, guideName, updates);
 
@@ -1345,7 +1396,11 @@ export async function handleGuideUpdate(args?: GuideUpdateArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides.json", "save", { reason: "update_guide", guide: guideName });
+  if (args?.new_name && args.new_name.toLowerCase().trim() !== guideName.toLowerCase().trim()) {
+    core.renameGuideInMemories(guideName, args.new_name);
+  }
+
+  logger.data("guides", "save", { reason: "update_guide", guide: guideName });
   guides.saveGuides(allGuides);
 
   logger.flow("guide_update", "complete", { guide: guideName, updated_fields: fieldsToUpdate });
@@ -1367,7 +1422,7 @@ export async function handleGuideForget(args?: GuideForgetArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides = guides.loadGuides();
   const success = guides.deleteGuide(allGuides, guideName);
 
@@ -1379,7 +1434,9 @@ export async function handleGuideForget(args?: GuideForgetArgs): Promise<ToolRes
     };
   }
 
-  logger.data("guides.json", "save", { reason: "forget_guide", guide: guideName, remaining: allGuides.length });
+  core.removeGuideFromMemories(guideName.toLowerCase().trim());
+
+  logger.data("guides", "save", { reason: "forget_guide", guide: guideName, remaining: allGuides.length });
   guides.saveGuides(allGuides, { force: true });
 
   logger.flow("guide_forget", "complete", { guide: guideName });
@@ -1414,7 +1471,7 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
     };
   }
 
-  logger.data("guides.json", "load");
+  logger.data("guides", "load");
   const allGuides: any[] = guides.loadGuides();
 
   const sourceGuides: any[] = [];
@@ -1453,10 +1510,20 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
   newGuide.usage_count = totalUsage;
   newGuide.anti_patterns = antiPatterns;
   newGuide.known_pitfalls = pitfalls;
+  newGuide.source_memories = [...new Set(sourceGuides.flatMap((g: any) => g.source_memories || []).filter(Boolean))];
+  newGuide.validated_by = [...new Set(sourceGuides.flatMap((g: any) => g.validated_by || []).filter(Boolean))];
   allGuides.push(newGuide);
 
+  for (const oldName of guideNames) {
+    core.renameGuideInMemories(oldName, newGuideName);
+    try {
+      const db = getDb();
+      db.prepareCached("DELETE FROM guides WHERE guide = ? COLLATE NOCASE").run(oldName.toLowerCase().trim());
+    } catch {}
+  }
+
   const mergedGuides = allGuides.filter((g: any) => !guideNames.map((n: string) => n.toLowerCase()).includes(g.guide));
-  logger.data("guides.json", "save", { reason: "merge_guides", new_guide: newGuideName, removed: guideNames, total_usage: totalUsage });
+  logger.data("guides", "save", { reason: "merge_guides", new_guide: newGuideName, removed: guideNames, total_usage: totalUsage });
   guides.saveGuides(mergedGuides);
 
   let response = `Merged ${guideNames.length} guides into "${newGuide.guide}" (${newGuide.category})\n`;
@@ -1483,7 +1550,7 @@ export async function handleMemoryStats(args?: MemoryStatsArgs): Promise<ToolRes
 
   logger.flow("memory_stats", "start", { project });
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory = core.loadMemory();
   const stats = core.calculateStats(memory, project);
 
@@ -1496,7 +1563,7 @@ export async function handleMemoryStats(args?: MemoryStatsArgs): Promise<ToolRes
 export async function handleMemoryAudit(_args?: Record<string, unknown>): Promise<ToolResult> {
   logger.flow("memory_audit", "start");
 
-  logger.data("memory.json", "load");
+  logger.data("memory", "load");
   const memory = core.loadMemory();
   const result = core.auditMemory(memory);
 
@@ -1541,6 +1608,146 @@ export async function handleSessionStats(args?: SessionStatsArgs): Promise<ToolR
 
   logger.flow("session_stats", "complete", { count, recent_count: recentSessions.length, has_current: !!current });
   return { content: [{ type: "text", text: output }] };
+}
+
+export async function handleMemoryLibrary(args?: MemoryLibraryArgs): Promise<ToolResult> {
+  const project = args?.project ?? null;
+  const focus = args?.focus ?? "full";
+
+  logger.flow("memory_library", "start", { project, focus });
+
+  const db = getDb();
+
+  const snapshot = collectLibrarySnapshot(db, { project, focus });
+  const formatted = formatLibrarySnapshot(snapshot, focus);
+
+  logger.flow("memory_library", "complete", {
+    total_memories: snapshot.total_memories,
+    total_guides: snapshot.total_guides,
+    suggestions: snapshot.suggestions.length,
+  });
+
+  return {
+    content: [{ type: "text", text: formatted }],
+  };
+}
+
+export async function handleConflictScan(args?: { project?: string }): Promise<ToolResult> {
+  logger.flow("conflict_scan", "start", { project: args?.project });
+
+  const memory = core.loadMemory();
+  const filtered = args?.project
+    ? core.filterByProject(memory, args.project)
+    : memory;
+
+  const conflicts = intel.scanForConflicts(filtered);
+
+  logger.flow("conflict_scan", "complete", { conflicts: conflicts.length });
+  return {
+    content: [{ type: "text", text: intel.formatConflictResults(conflicts) }],
+  };
+}
+
+export async function handleProactiveAnalysis(args?: { project?: string }): Promise<ToolResult> {
+  logger.flow("proactive_analysis", "start", { project: args?.project });
+
+  const memory = core.loadMemory();
+  const allGuides = guides.loadGuides();
+
+  const filtered = args?.project
+    ? core.filterByProject(memory, args.project)
+    : memory;
+
+  const suggestions = intel.runFullAnalysis(filtered, allGuides);
+
+  const conflicts = intel.scanForConflicts(filtered);
+  if (conflicts.length > 0) {
+    suggestions.push({
+      type: "conflict",
+      priority: "high",
+      message: `${conflicts.length} conflicting memory pair(s) detected. Run conflict_scan for details.`,
+    });
+  }
+
+  let output = `=== PROACTIVE ANALYSIS ===\n`;
+  output += `Analyzed ${filtered.length} memories and ${allGuides.length} guides.\n\n`;
+  output += intel.formatSuggestions(suggestions);
+
+  if (suggestions.length === 0) {
+    output = `=== PROACTIVE ANALYSIS ===\nNo issues detected. Knowledge base looks healthy.`;
+  }
+
+  logger.flow("proactive_analysis", "complete", { suggestions: suggestions.length });
+  return {
+    content: [{ type: "text", text: output }],
+  };
+}
+
+export async function handleProjectAnalytics(args?: { project?: string }): Promise<ToolResult> {
+  const project = args?.project || null;
+
+  if (!project) {
+    logger.flow("project_analytics", "all_projects");
+    const db = getDb();
+    const allProgress = intel.getAllProjectsAnalytics(db);
+    if (allProgress.length === 0) {
+      return {
+        content: [{ type: "text", text: "No projects found with session or memory data." }],
+      };
+    }
+    let output = `=== ALL PROJECTS OVERVIEW ===\n\n`;
+    for (const p of allProgress) {
+      output += `${p.project}: ${p.total_sessions} sessions, ${p.total_memories} memories, health ${(p.health_score * 100).toFixed(0)}%\n`;
+    }
+    return {
+      content: [{ type: "text", text: output }],
+    };
+  }
+
+  logger.flow("project_analytics", "start", { project });
+  const db = getDb();
+  const progress = intel.getProjectAnalytics(db, project);
+  const formatted = intel.formatProjectProgress(progress);
+
+  logger.flow("project_analytics", "complete", { project, health: progress.health_score });
+  return {
+    content: [{ type: "text", text: formatted }],
+  };
+}
+
+export async function handleSemanticSearch(args?: { query?: string; project?: string; topK?: number }): Promise<ToolResult> {
+  const query = args?.query;
+  const project = args?.project || null;
+  const topK = args?.topK || 10;
+
+  logger.flow("semantic_search", "start", { query: query?.slice(0, 50), project, topK });
+
+  if (!query || typeof query !== "string") {
+    return {
+      content: [{ type: "text", text: "Error: 'query' parameter is required" }],
+      isError: true,
+    };
+  }
+
+  const db = getDb();
+  const results = intel.semanticSearch(db, query, { project, topK });
+
+  if (results.length === 0) {
+    return {
+      content: [{ type: "text", text: `No semantically similar memories found for: "${query}"` }],
+    };
+  }
+
+  let output = `=== SEMANTIC SEARCH RESULTS ===\nQuery: "${query}"\nFound ${results.length} similar memories:\n\n`;
+  for (const r of results) {
+    output += `  [${(r.score * 100).toFixed(0)}%] [${r.memory_id}] "${r.title}"\n`;
+    output += `      ${r.fragment.substring(0, 100)}...\n`;
+  }
+
+  logger.flow("semantic_search", "complete", { results: results.length });
+  return {
+    content: [{ type: "text", text: output }],
+  };
 }
 
 export async function handleCallTool(request: ToolCallRequest): Promise<ToolResult> {
@@ -1643,6 +1850,31 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
       }
       case "session_stats": {
         const result = await handleSessionStats(args as SessionStatsArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "memory_library": {
+        const result = await handleMemoryLibrary(args as MemoryLibraryArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "conflict_scan": {
+        const result = await handleConflictScan(args as { project?: string });
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "proactive_analysis": {
+        const result = await handleProactiveAnalysis(args as { project?: string });
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "project_analytics": {
+        const result = await handleProjectAnalytics(args as { project?: string });
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "semantic_search": {
+        const result = await handleSemanticSearch(args as { query?: string; project?: string; topK?: number });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }

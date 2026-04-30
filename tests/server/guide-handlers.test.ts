@@ -7,17 +7,20 @@ import os from "os";
 import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as handlers from "../../src/server/handlers.js";
+import { closeDb } from "../../src/db/index.js";
 import type { Guide } from "../../src/types.js";
 
 let TMPDIR: string;
 
 beforeEach(() => {
   TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), "lemma-test-"));
+  closeDb();
   core.setMemoryDir(TMPDIR);
   guides.setGuidesDir(TMPDIR);
 });
 
 afterEach(() => {
+  closeDb();
   core.setMemoryDir(path.join(os.homedir(), ".lemma"));
   guides.setGuidesDir(path.join(os.homedir(), ".lemma"));
   fs.rmSync(TMPDIR, { recursive: true, force: true });

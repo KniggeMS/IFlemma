@@ -23,10 +23,6 @@ const DEFAULT_CONFIG: LemmaConfig = {
     timeout_minutes: 30,
     idle_timeout_seconds: 120,
   },
-  embeddings: {
-    enabled: true,
-    model: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
-  },
 };
 
 let _config: LemmaConfig | null = null;
@@ -69,9 +65,12 @@ export function resetConfig(): void {
   _config = null;
 }
 
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function deepMerge(target: LemmaConfig, source: Record<string, unknown>): LemmaConfig {
   const result = { ...target } as Record<string, unknown>;
   for (const key of Object.keys(source)) {
+    if (DANGEROUS_KEYS.has(key)) continue;
     const srcVal = (source as Record<string, unknown>)[key];
     if (srcVal && typeof srcVal === "object" && !Array.isArray(srcVal)) {
       result[key] = deepMerge((result[key] || {}) as LemmaConfig, srcVal as Record<string, unknown>);

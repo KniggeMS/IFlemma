@@ -1,18 +1,18 @@
 import os from "os";
 import path from "path";
-import fs from "fs";
 import crypto from "crypto";
-import Fuse from "fuse.js";
+
 import type { MemoryFragment, MemoryRelation, MemoryStats, AuditResult, FragmentType } from "../types.js";
 import { logger } from "../logger.js";
-import { vectorSearch, isEmbeddingsReady, embed, cosineSimilarity, embedFragment, backfillEmbeddings } from "./embeddings.js";
+
+import { getDb, setDataDir } from "../db/database.js";
+import * as store from "../db/memory-store.js";
 
 let MEMORY_DIR = path.join(os.homedir(), ".lemma");
-let MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
 
 export function setMemoryDir(dir: string): void {
   MEMORY_DIR = dir;
-  MEMORY_FILE = path.join(MEMORY_DIR, "memory.jsonl");
+  setDataDir(dir);
 }
 
 export function generateId(): string {
@@ -89,51 +89,108 @@ export async function findSimilarFragment(fragments: MemoryFragment[], fragmentT
 
   logger.flow("dedup", "checking", { threshold, scopedCount: scopedFragments.length });
 
-  if (isEmbeddingsReady()) {
-    const queryVec = await embed(fragmentText);
-    if (queryVec) {
-      let best: MemoryFragment | null = null;
-      let bestScore = 0;
-      const vectorThreshold = 0.85;
+  try {
+    const db = getDb();
+    const ftsQuery = fragmentText
+      .replace(/[\p{P}\p{S}]/gu, " ")
+      .split(/\s+/)
+      .filter(t => t.length > 0)
+      .join(" OR ");
 
-      for (const frag of scopedFragments) {
-        if (!frag.embedding) continue;
-        const score = cosineSimilarity(queryVec, frag.embedding);
-        if (score > bestScore) {
-          bestScore = score;
-          best = frag;
-        }
-      }
-
-      if (best && bestScore >= vectorThreshold) {
-        logger.flow("dedup", "found_similar_vector", { id: best.id, score: bestScore });
-        return best;
-      }
-
-      logger.flow("dedup", "no_similar_vector");
+    if (!ftsQuery) {
+      logger.flow("dedup", "no_similar");
       return null;
     }
+
+    let sql: string;
+    let params: any[];
+
+    if (project) {
+      sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+             FROM memory_fts fts
+             JOIN memories m ON m.id = fts.rowid
+             LEFT JOIN memories p ON m.parent_id = p.id
+             WHERE memory_fts MATCH ? AND (m.project = ? OR m.project IS NULL)
+             ORDER BY rank
+             LIMIT 3`;
+      params = [ftsQuery, project.toLowerCase()];
+    } else {
+      sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+             FROM memory_fts fts
+             JOIN memories m ON m.id = fts.rowid
+             LEFT JOIN memories p ON m.parent_id = p.id
+             WHERE memory_fts MATCH ? AND m.project IS NULL
+             ORDER BY rank
+             LIMIT 3`;
+      params = [ftsQuery];
+    }
+
+    const rows = db.prepareCached(sql).all(...params) as Record<string, any>[];
+
+    if (rows.length > 0) {
+      const ids = rows.map(r => r.id as number);
+      const relRows = db.prepareCached(
+        `SELECT r.source_id, r.type, r.note, r.created_at, m.legacy_id as target_legacy_id
+         FROM relations r JOIN memories m ON m.id = r.target_id
+         WHERE r.source_id IN (${ids.map(() => "?").join(",")})`
+      ).all(...ids) as { source_id: number; target_legacy_id: string; type: string; note: string | null; created_at: string }[];
+
+      const relationsMap = new Map<number, MemoryRelation[]>();
+      for (const rr of relRows) {
+        const list = relationsMap.get(rr.source_id) ?? [];
+        list.push({ id: rr.target_legacy_id, type: rr.type as MemoryRelation["type"], note: rr.note ?? undefined, created: rr.created_at });
+        relationsMap.set(rr.source_id, list);
+      }
+
+      for (const row of rows) {
+        const score = row.rank;
+        const similarity = 1 / (1 + Math.exp(score / 2));
+        if (similarity >= threshold) {
+          const frag = rowToFragment(row, relationsMap.get(row.id) ?? []);
+          logger.flow("dedup", "found_similar", { id: frag.id, similarity });
+          return frag;
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn("FTS dedup search failed", { error: String(err) });
   }
 
-  const fuse = new Fuse(scopedFragments, {
-    keys: ['fragment', 'title'],
-    threshold: 0.3,
-    includeScore: true,
-    ignoreLocation: true,
-  });
-
-  const fuseResults = fuse.search(fragmentText, { limit: 3 });
-
-  for (const result of fuseResults) {
-    const similarity = 1 - (result.score || 1);
-    if (similarity >= threshold) {
-      logger.flow("dedup", "found_similar", { id: result.item.id, similarity });
-      return result.item;
+  const queryWords = new Set(fragmentText.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+  if (queryWords.size > 0) {
+    let bestFallback: MemoryFragment | null = null;
+    let bestFallbackScore = 0;
+    for (const frag of scopedFragments) {
+      const fragWords = new Set(frag.fragment.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+      let overlap = 0;
+      for (const w of queryWords) {
+        if (fragWords.has(w)) overlap++;
+      }
+      const score = overlap / queryWords.size;
+      if (score > bestFallbackScore) {
+        bestFallbackScore = score;
+        bestFallback = frag;
+      }
+    }
+    if (bestFallback && bestFallbackScore >= threshold) {
+      logger.flow("dedup", "found_similar_fallback", { id: bestFallback.id, score: bestFallbackScore });
+      return bestFallback;
     }
   }
 
   logger.flow("dedup", "no_similar");
   return null;
+}
+
+function wordOverlapScore(textA: string, textB: string): number {
+  const wordsA = new Set(textA.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+  const wordsB = new Set(textB.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  return intersection / Math.max(wordsA.size, wordsB.size);
 }
 
 export async function findTopicOverlaps(fragments: MemoryFragment[], fragmentText: string, project: string | null, limit = 5): Promise<MemoryFragment[]> {
@@ -142,44 +199,82 @@ export async function findTopicOverlaps(fragments: MemoryFragment[], fragmentTex
 
   logger.flow("overlap", "searching", { scopedCount: scopedFragments.length });
 
-  if (isEmbeddingsReady()) {
-    const queryVec = await embed(fragmentText);
-    if (queryVec) {
-      const overlaps: { frag: MemoryFragment; score: number }[] = [];
+  try {
+    const db = getDb();
+    const ftsQuery = fragmentText
+      .replace(/[\p{P}\p{S}]/gu, " ")
+      .split(/\s+/)
+      .filter(t => t.length > 0)
+      .join(" OR ");
 
-      for (const frag of scopedFragments) {
-        if (!frag.embedding) continue;
-        const score = cosineSimilarity(queryVec, frag.embedding);
-        if (score >= 0.5 && score < 0.85) {
-          overlaps.push({ frag, score });
-        }
+    if (ftsQuery) {
+      let sql: string;
+      let params: any[];
+
+      if (project) {
+        sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+               FROM memory_fts fts
+               JOIN memories m ON m.id = fts.rowid
+               LEFT JOIN memories p ON m.parent_id = p.id
+               WHERE memory_fts MATCH ? AND (m.project = ? OR m.project IS NULL)
+               ORDER BY rank
+               LIMIT ?`;
+        params = [ftsQuery, project.toLowerCase(), limit];
+      } else {
+        sql = `SELECT m.*, p.legacy_id as parent_legacy_id, bm25(memory_fts) as rank
+               FROM memory_fts fts
+               JOIN memories m ON m.id = fts.rowid
+               LEFT JOIN memories p ON m.parent_id = p.id
+               WHERE memory_fts MATCH ? AND m.project IS NULL
+               ORDER BY rank
+               LIMIT ?`;
+        params = [ftsQuery, limit];
       }
 
-      overlaps.sort((a, b) => b.score - a.score);
-      logger.flow("overlap", "found_vector", { count: overlaps.length });
-      return overlaps.slice(0, limit).map(o => o.frag);
+      const rows = db.prepareCached(sql).all(...params) as Record<string, any>[];
+
+      if (rows.length > 0) {
+        const ids = rows.map(r => r.id as number);
+        const relRows = db.prepareCached(
+          `SELECT r.source_id, r.type, r.note, r.created_at, m.legacy_id as target_legacy_id
+           FROM relations r JOIN memories m ON m.id = r.target_id
+           WHERE r.source_id IN (${ids.map(() => "?").join(",")})`
+        ).all(...ids) as { source_id: number; target_legacy_id: string; type: string; note: string | null; created_at: string }[];
+
+        const relationsMap = new Map<number, MemoryRelation[]>();
+        for (const rr of relRows) {
+          const list = relationsMap.get(rr.source_id) ?? [];
+          list.push({ id: rr.target_legacy_id, type: rr.type as MemoryRelation["type"], note: rr.note ?? undefined, created: rr.created_at });
+          relationsMap.set(rr.source_id, list);
+        }
+
+        for (const row of rows) {
+          const ftsFrag = rowToFragment(row, relationsMap.get(row.id) ?? []);
+          const ftsScore = wordOverlapScore(fragmentText, ftsFrag.fragment);
+          if (ftsScore >= 0.25) {
+            const alreadyExists = scopedFragments.some(f => f.id === ftsFrag.id);
+            if (!alreadyExists) {
+              scopedFragments.push(ftsFrag);
+            }
+          }
+        }
+      }
     }
+  } catch (err) {
+    logger.warn("FTS overlap search failed", { error: String(err) });
   }
 
-  const fuse = new Fuse(scopedFragments, {
-    keys: ['fragment', 'title'],
-    threshold: 0.6,
-    includeScore: true,
-    ignoreLocation: true,
-  });
-
-  const fuseResults = fuse.search(fragmentText, { limit });
-  const overlaps: MemoryFragment[] = [];
-
-  for (const result of fuseResults) {
-    const similarity = 1 - (result.score || 1);
-    if (similarity >= 0.4 && similarity < 0.65) {
-      overlaps.push(result.item);
+  const fallbackOverlaps: { frag: MemoryFragment; score: number }[] = [];
+  for (const frag of scopedFragments) {
+    const score = wordOverlapScore(fragmentText, frag.fragment);
+    if (score >= 0.25 && score < 0.95) {
+      fallbackOverlaps.push({ frag, score });
     }
   }
-
-  logger.flow("overlap", "found", { count: overlaps.length });
-  return overlaps;
+  fallbackOverlaps.sort((a, b) => b.score - a.score);
+  const result = fallbackOverlaps.slice(0, limit).map(o => o.frag);
+  logger.flow("overlap", "found_fallback", { count: result.length });
+  return result;
 }
 
 export function boostOnAccess(fragment: MemoryFragment, context: string | null = null): MemoryFragment {
@@ -198,6 +293,16 @@ export function boostOnAccess(fragment: MemoryFragment, context: string | null =
     }
   }
 
+  try {
+    const db = getDb();
+    store.updateMemory(db, fragment.id, {
+      confidence: boosted.confidence,
+      context_tags: boosted.tags,
+    });
+  } catch (err) {
+    logger.warn("Failed to write-through boost", { id: fragment.id, error: String(err) });
+  }
+
   return boosted;
 }
 
@@ -209,6 +314,18 @@ export function recordNegativeHit(fragment: MemoryFragment): MemoryFragment {
     lastAccessed: new Date().toISOString()
   };
   logger.flow("confidence", "penalize", { id: fragment.id, from: fragment.confidence, to: result.confidence });
+
+  try {
+    const db = getDb();
+    db.prepareCached(
+      `UPDATE memories SET confidence = ?, negative_hits = negative_hits + 1,
+       last_accessed_at = datetime('now'), updated_at = datetime('now')
+       WHERE legacy_id = ?`
+    ).run(result.confidence, fragment.id);
+  } catch (err) {
+    logger.warn("Failed to write-through negative hit", { id: fragment.id, error: String(err) });
+  }
+
   return result;
 }
 
@@ -231,7 +348,32 @@ export function trackAssociations(fragments: MemoryFragment[], accessedId: strin
     }
   }
   target.associatedWith = [...existing];
+
+  try {
+    const db = getDb();
+    const stmt = db.prepareCached(
+      `UPDATE memories SET associated_with = ?, updated_at = datetime('now') WHERE legacy_id = ?`
+    );
+    stmt.run(JSON.stringify(target.associatedWith), target.id);
+    for (const id of sessionIds) {
+      if (id !== accessedId) {
+        const other = fragments.find(f => f.id === id);
+        if (other) {
+          stmt.run(JSON.stringify(other.associatedWith), other.id);
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn("Failed to write-through associations", { error: String(err) });
+  }
 }
+
+const REVERSE_RELATION_MAP: Record<string, MemoryRelation["type"]> = {
+  supports: "supports",
+  contradicts: "contradicts",
+  supersedes: "superseded_by",
+  related_to: "related_to",
+};
 
 export function addRelation(fragments: MemoryFragment[], sourceId: string, targetId: string, type: MemoryRelation["type"], note?: string): boolean {
   const source = fragments.find(f => f.id === sourceId);
@@ -254,84 +396,301 @@ export function addRelation(fragments: MemoryFragment[], sourceId: string, targe
     created: new Date().toISOString().split("T")[0] || "",
   });
 
+  const reverseType = REVERSE_RELATION_MAP[type] || "related_to";
   target.relations = target.relations || [];
-  const reverseExists = target.relations.find(r => r.id === sourceId);
+  const reverseExists = target.relations.find(r => r.id === sourceId && r.type === reverseType);
   if (!reverseExists) {
     target.relations.push({
       id: sourceId,
-      type: "related_to",
+      type: reverseType,
       note: `Reverse of ${type}`,
       created: new Date().toISOString().split("T")[0] || "",
     });
+  }
+
+  try {
+    const db = getDb();
+    const sourceRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(sourceId) as { id: number } | undefined;
+    const targetRow = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(targetId) as { id: number } | undefined;
+    if (sourceRow && targetRow) {
+      store.addRelation(db, sourceRow.id, targetRow.id, type, note);
+      store.addRelation(db, targetRow.id, sourceRow.id, reverseType, `Reverse of ${type}`);
+    }
+  } catch (err) {
+    logger.warn("Failed to write-through relation", { sourceId, targetId, error: String(err) });
   }
 
   return true;
 }
 
 export function loadMemory(): MemoryFragment[] {
-  logger.data("memory.jsonl", "load_start");
+  logger.data("memory.sqlite", "load_start");
   try {
-    if (!fs.existsSync(MEMORY_FILE)) {
+    const db = getDb();
+
+    const rows = db.prepareCached(
+      `SELECT m.*, p.legacy_id as parent_legacy_id
+       FROM memories m
+       LEFT JOIN memories p ON m.parent_id = p.id
+       ORDER BY m.confidence DESC`
+    ).all() as Record<string, any>[];
+
+    if (rows.length === 0) {
       return [];
     }
-    const content = fs.readFileSync(MEMORY_FILE, "utf-8");
-    if (!content.trim()) {
-      return [];
+
+    const ids = rows.map(r => r.id as number);
+    const placeholders = ids.map(() => "?").join(",");
+
+    const childRows = db.prepareCached(
+      `SELECT parent_id, legacy_id FROM memories WHERE parent_id IN (${placeholders})`
+    ).all(...ids) as { parent_id: number; legacy_id: string }[];
+
+    const childrenMap = new Map<number, string[]>();
+    for (const cr of childRows) {
+      const list = childrenMap.get(cr.parent_id) ?? [];
+      list.push(cr.legacy_id);
+      childrenMap.set(cr.parent_id, list);
     }
-    const fragments = content
-      .trim()
-      .split("\n")
-      .map(line => JSON.parse(line));
-    logger.data("memory.jsonl", "loaded", { count: fragments.length });
+
+    const relRows = db.prepareCached(
+      `SELECT r.source_id, r.type, r.note, r.created_at, m.legacy_id as target_legacy_id
+       FROM relations r
+       JOIN memories m ON m.id = r.target_id
+       WHERE r.source_id IN (${placeholders})`
+    ).all(...ids) as {
+      source_id: number;
+      target_legacy_id: string;
+      type: string;
+      note: string | null;
+      created_at: string;
+    }[];
+
+    const relationsMap = new Map<number, MemoryRelation[]>();
+    for (const rr of relRows) {
+      const list = relationsMap.get(rr.source_id) ?? [];
+      list.push({
+        id: rr.target_legacy_id,
+        type: rr.type as MemoryRelation["type"],
+        note: rr.note ?? undefined,
+        created: rr.created_at,
+      });
+      relationsMap.set(rr.source_id, list);
+    }
+
+    const fragments = rows.map(row => {
+      const frag = rowToFragment(row, relationsMap.get(row.id) ?? []);
+      frag.child_ids = childrenMap.get(row.id) ?? [];
+      return frag;
+    });
+
+    logger.data("memory.sqlite", "loaded", { count: fragments.length });
     return fragments;
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.error("Failed to load memory", msg);
+    logger.error("Failed to load memory from SQLite", msg);
+    return [];
+  }
+}
+
+function rowToFragment(row: Record<string, any>, relations: MemoryRelation[] = []): MemoryFragment {
+  return {
+    id: row.legacy_id ?? String(row.id),
+    title: row.title,
+    description: row.description ?? "",
+    fragment: row.fragment,
+    project: row.project ?? null,
+    confidence: row.confidence,
+    source: row.source,
+    created: row.created_at,
+    lastAccessed: row.last_accessed_at ?? row.created_at,
+    accessed: row.access_count,
+    tags: parseJsonField(row.context_tags),
+    associatedWith: parseJsonField(row.associated_with),
+    relations,
+    negativeHits: row.negative_hits,
+    quality_score: row.quality_score,
+    refinement_count: row.refinement_count,
+    parent_id: row.parent_legacy_id ?? null,
+    child_ids: [],
+    session_id: row.session_id ?? null,
+    task_type: row.task_type ?? null,
+    outcome: null,
+    positive_feedback: row.positive_feedback,
+    negative_feedback: row.negative_feedback,
+    last_refined: row.last_refined ?? null,
+    type: row.type,
+    related_guides: parseJsonField(row.related_guides),
+    distill_candidate: row.distill_candidate === 1,
+  };
+}
+
+function parseJsonField(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
     return [];
   }
 }
 
 export function saveMemory(fragments: MemoryFragment[], options: { force?: boolean } = {}): void {
   try {
-    const dir = path.dirname(MEMORY_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
     if ((!fragments || fragments.length === 0) && !options.force) {
       logger.warn("Aborted save of empty memory array");
       return;
     }
 
-    logger.data("memory.jsonl", "save_start", { count: fragments?.length ?? 0, force: options.force });
+    logger.data("memory.sqlite", "save_start", { count: fragments?.length ?? 0, force: options.force });
 
-    const jsonl = fragments && fragments.length > 0 ? fragments.map(f => JSON.stringify(f)).join("\n") : "";
+    const db = getDb();
 
-    const backupFile = MEMORY_FILE + ".bak";
-    if (fs.existsSync(backupFile)) {
-      try {
-        const backupContent = fs.readFileSync(backupFile, "utf-8");
-        const backupEntries = backupContent.trim().split("\n").filter(Boolean).map(l => JSON.parse(l));
-        const backupIds = new Set(backupEntries.map((e: MemoryFragment) => e.id));
-        const newEntries = fragments.filter(f => !backupIds.has(f.id));
-        if (newEntries.length > 0) {
-          const merged = [...backupEntries, ...newEntries];
-          fs.writeFileSync(backupFile, merged.map(f => JSON.stringify(f)).join("\n"), "utf-8");
-          logger.data("memory.jsonl.bak", "backup_merge", { newEntries: newEntries.length });
-        }
-      } catch {
-        fs.writeFileSync(backupFile, jsonl, "utf-8");
+    const upsertStmt = db.prepareCached(`
+      INSERT INTO memories (
+        legacy_id, title, fragment, description, type, project, source, confidence,
+        context_tags, access_count, last_accessed_at, negative_hits, positive_feedback,
+        negative_feedback, quality_score, refinement_count, session_id, task_type,
+        distill_candidate, related_guides, associated_with, last_refined, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+      ON CONFLICT(legacy_id) DO UPDATE SET
+        title = excluded.title,
+        fragment = excluded.fragment,
+        description = excluded.description,
+        type = excluded.type,
+        project = excluded.project,
+        source = excluded.source,
+        confidence = excluded.confidence,
+        context_tags = excluded.context_tags,
+        access_count = excluded.access_count,
+        last_accessed_at = excluded.last_accessed_at,
+        negative_hits = excluded.negative_hits,
+        positive_feedback = excluded.positive_feedback,
+        negative_feedback = excluded.negative_feedback,
+        quality_score = excluded.quality_score,
+        refinement_count = excluded.refinement_count,
+        session_id = excluded.session_id,
+        task_type = excluded.task_type,
+        distill_candidate = excluded.distill_candidate,
+        related_guides = excluded.related_guides,
+        associated_with = excluded.associated_with,
+        last_refined = excluded.last_refined,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = new Date().toISOString();
+
+    const { db: rawDb } = db;
+    const transaction = rawDb.transaction(() => {
+      for (const frag of fragments) {
+        upsertStmt.run(
+          frag.id,
+          frag.title,
+          frag.fragment,
+          frag.description || null,
+          frag.type || "fact",
+          frag.project || null,
+          frag.source || "ai",
+          frag.confidence ?? 0.5,
+          frag.tags ? JSON.stringify(frag.tags) : null,
+          frag.accessed ?? 0,
+          frag.lastAccessed || null,
+          frag.negativeHits ?? 0,
+          frag.positive_feedback ?? 0,
+          frag.negative_feedback ?? 0,
+          frag.quality_score ?? null,
+          frag.refinement_count ?? 0,
+          frag.session_id || null,
+          frag.task_type || null,
+          frag.distill_candidate ? 1 : 0,
+          frag.related_guides ? JSON.stringify(frag.related_guides) : null,
+          frag.associatedWith ? JSON.stringify(frag.associatedWith) : null,
+          frag.last_refined || null,
+          frag.created || now,
+          now,
+        );
       }
-    } else {
-      fs.writeFileSync(backupFile, jsonl, "utf-8");
-    }
+    });
 
-    fs.writeFileSync(MEMORY_FILE, jsonl, "utf-8");
-    logger.data("memory.jsonl", "saved", { count: fragments?.length ?? 0 });
+    transaction();
+
+    logger.data("memory.sqlite", "saved", { count: fragments?.length ?? 0 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.error("Failed to save memory", msg);
+    logger.error("Failed to save memory to SQLite", msg);
     throw error;
+  }
+}
+
+export function removeGuideFromMemories(guideName: string): number {
+  const normalized = guideName.toLowerCase().trim();
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT id, legacy_id, related_guides FROM memories WHERE related_guides IS NOT NULL`
+    ).all() as { id: number; legacy_id: string; related_guides: string }[];
+
+    let cleaned = 0;
+    for (const row of rows) {
+      const guides: string[] = JSON.parse(row.related_guides);
+      const filtered = guides.filter(g => g.toLowerCase() !== normalized);
+      if (filtered.length !== guides.length) {
+        db.prepareCached(
+          `UPDATE memories SET related_guides = ?, updated_at = datetime('now') WHERE id = ?`
+        ).run(JSON.stringify(filtered), row.id);
+        cleaned++;
+      }
+    }
+    logger.flow("memory", "remove_guide_refs", { guide: guideName, cleaned });
+    return cleaned;
+  } catch (err) {
+    logger.warn("Failed to remove guide from memories", { guide: guideName, error: String(err) });
+    return 0;
+  }
+}
+
+export function renameGuideInMemories(oldName: string, newName: string): number {
+  const oldNorm = oldName.toLowerCase().trim();
+  const newNorm = newName.toLowerCase().trim();
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT id, legacy_id, related_guides FROM memories WHERE related_guides IS NOT NULL`
+    ).all() as { id: number; legacy_id: string; related_guides: string }[];
+
+    let renamed = 0;
+    for (const row of rows) {
+      const guides: string[] = JSON.parse(row.related_guides);
+      if (guides.some(g => g.toLowerCase() === oldNorm)) {
+        const updated = guides.map(g => g.toLowerCase() === oldNorm ? newNorm : g);
+        db.prepareCached(
+          `UPDATE memories SET related_guides = ?, updated_at = datetime('now') WHERE id = ?`
+        ).run(JSON.stringify(updated), row.id);
+        renamed++;
+      }
+    }
+    logger.flow("memory", "rename_guide_refs", { old: oldName, new: newName, renamed });
+    return renamed;
+  } catch (err) {
+    logger.warn("Failed to rename guide in memories", { old: oldName, new: newName, error: String(err) });
+    return 0;
+  }
+}
+
+export function deleteMemory(id: string): boolean {
+  try {
+    const db = getDb();
+    const result = db.prepareCached("DELETE FROM memories WHERE legacy_id = ?").run(id);
+    if (result.changes > 0) {
+      return true;
+    }
+    return false;
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to delete memory from SQLite", msg);
+    return false;
   }
 }
 
@@ -359,13 +718,13 @@ function releaseLock(): void {
 }
 
 export async function saveMemorySafe(fragments: MemoryFragment[], options: { force?: boolean } = {}): Promise<void> {
-  logger.data("memory.jsonl", "acquiring_lock");
+  logger.data("memory.sqlite", "acquiring_lock");
   await acquireLock();
   try {
     saveMemory(fragments, options);
   } finally {
     releaseLock();
-    logger.data("memory.jsonl", "released_lock");
+    logger.data("memory.sqlite", "released_lock");
   }
 }
 
@@ -373,25 +732,32 @@ export function applySessionDecay(): MemoryFragment[] {
   logger.flow("decay", "session_start");
   const memory = loadMemory();
   const decayed = decayConfidence(memory);
-  saveMemory(decayed);
+
+  try {
+    const db = getDb();
+    store.decayMemories(db);
+  } catch (err) {
+    logger.warn("Failed to apply decay in SQLite", { error: String(err) });
+  }
+
   logger.flow("decay", "session_complete", { count: memory.length });
   return decayed;
 }
 
 export function migrateConfidenceFloor(): number {
   logger.flow("migration", "confidence_floor");
-  const memory = loadMemory();
   let migrated = 0;
-  const updated = memory.map(frag => {
-    if (frag.confidence < 0.3) {
-      migrated++;
-      return { ...frag, confidence: 0.3 };
-    }
-    return frag;
-  });
-  if (migrated > 0) {
-    saveMemory(updated);
+
+  try {
+    const db = getDb();
+    const result = db.prepareCached(
+      `UPDATE memories SET confidence = MAX(confidence, 0.3), updated_at = datetime('now') WHERE confidence < 0.3`
+    ).run();
+    migrated = result.changes;
+  } catch (err) {
+    logger.warn("Failed to migrate confidence floor in SQLite", { error: String(err) });
   }
+
   logger.flow("migration", "migrated", { count: migrated });
   return migrated;
 }
@@ -454,39 +820,17 @@ export async function searchAndSortFragments(fragments: MemoryFragment[], query:
     return sorted;
   }
 
-  const fuseOptions = {
-    keys: [
-      { name: 'title', weight: 0.4 },
-      { name: 'fragment', weight: 0.6 }
-    ],
-    threshold: 0.3,
-    distance: 100,
-    minMatchCharLength: 2,
-    includeScore: true,
-    ignoreLocation: true,
-    findAllMatches: true
-  };
-
-  if (isEmbeddingsReady()) {
-    const vectorResults = await vectorSearch(query, fragments, topK);
-
-    if (vectorResults.length > 0) {
-      const topResults = vectorResults.map(r => r.item as MemoryFragment);
-      topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
-      topResults.forEach(frag => { frag.lastAccessed = nowDate; });
-      return topResults;
+  try {
+    const db = getDb();
+    const ftsResults = store.searchMemories(db, query, { topK });
+    if (ftsResults.length > 0) {
+      logger.flow("search", "fts_results", { count: ftsResults.length });
+      ftsResults.sort((a, b) => injectionScore(b) - injectionScore(a));
+      ftsResults.forEach(frag => { frag.lastAccessed = nowDate; });
+      return ftsResults;
     }
-  }
-
-  const fuse = new Fuse(fragments, fuseOptions);
-  const fuseResults = fuse.search(query, { limit: topK });
-
-  if (fuseResults.length > 0) {
-    logger.flow("search", "fuse_results", { count: fuseResults.length });
-    const topResults = fuseResults.map(r => r.item);
-    topResults.sort((a, b) => injectionScore(b) - injectionScore(a));
-    topResults.forEach(frag => { frag.lastAccessed = nowDate; });
-    return topResults;
+  } catch (err) {
+    logger.warn("FTS search failed", { error: String(err) });
   }
 
   logger.flow("search", "fallback");
