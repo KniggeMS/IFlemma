@@ -1,5 +1,109 @@
 # Changelog
 
+## [0.10.0] - 2026-04-30
+
+### Breaking Changes
+- **SQLite Migration** — All data storage migrated from JSONL flat files to SQLite (`~/.lemma/lemma.db`). Automatic migration on first launch; JSONL files renamed to `.migrated.bak`. No data loss.
+- **Embeddings removed** — `src/memory/embeddings.ts` deleted. Vector search was unreliable; English-only storage rule + FTS5 is the actual solution. `semantic_search` tool still exists but uses FTS5.
+
+### Added — SQLite Storage Layer (`src/db/`)
+
+- **`schema.ts`** — 6 tables: `memories`, `guides`, `relations`, `sessions`, `virtual_sessions`, `library_snapshots`. FTS5 virtual tables for memories and guides.
+- **`database.ts`** — `LemmaDB` class wrapping `better-sqlite3`. WAL mode, `prepareCached` for statement reuse.
+- **`memory-store.ts`** — Targeted SQL for all memory operations:
+  - `addMemory()` — single INSERT
+  - `getMemoryById()` — single SELECT by id or legacy_id
+  - `updateMemory()` — dynamic UPDATE with field-level granularity
+  - `deleteMemory()` — single DELETE
+  - `searchMemories()` — FTS5 full-text search with project/type/confidence/date filters
+  - `addRelation()` / `getRelations()` — typed bidirectional relations
+  - `boostConfidence()` — single UPDATE (confidence + access_count)
+  - `getMemoryStats()` — SQL aggregation (no array loading)
+  - `mergeMemories()` — transactional merge with relation inheritance
+- **`library-store.ts`** — Library Mode: full knowledge base snapshot with stale/duplicate/orphan detection and distill candidates.
+- **`migration.ts`** — `migrateFromJsonl()`: reads `memory.jsonl` + `guides.jsonl`, inserts into SQLite, renames originals to `.migrated.bak`. Idempotent.
+- **Targeted read functions** (no array loading):
+  - `memory/core.ts`: `getFragmentById()`, `findSimilarByText()`, `findTopicOverlapsByText()`, `searchMemory()`, `filterByProjectFromDb()`
+  - `guides/core.ts`: `findGuideByName()`, `findSimilarGuideByName()`, `suggestGuidesForTask()`, `getTopGuidesFromDb()`, `getGuidesByCategoryFromDb()`
+
+### Added — Intelligence Layer (`src/intelligence/`)
+
+- **Conflict Detection** (`conflict.ts`) — Negation pattern matching + topic overlap scoring. Detects contradictory fragments without LLM. Runs automatically on `memory_add`.
+- **Proactive Analysis** (`proactive.ts`) — 7 suggestion types: distill candidates, low-success guides, merge opportunities, stale guides, unused guides, contradictory pairs, high-value guides. Hot distill detection: 5+ accesses → medium priority, 10+ → high priority.
+- **Session Analytics** (`session-analytics.ts`) — Project-level analytics: knowledge growth rate, skill coverage trends, active technologies, guide success rates, health scores.
+- **Semantic Search** (`semantic.ts`) — FTS5-based search with project filter and confidence scoring.
+- **4 new MCP tools**: `conflict_scan`, `proactive_analysis`, `project_analytics`, `semantic_search`
+- **Auto-triggers**: Conflict detection + proactive suggestions run automatically on `memory_add` and `guide_practice`.
+
+### Added — System & CLI
+
+- **AGENTS.md rewrite** — Complete system guide with identity, core concepts, mandatory rules, workflow, intelligence features, maintenance, session management, fragment/guide writing guides, relations. Single source of truth for LLM rules.
+- **`system-prompt.ts` simplification** — `BASE_SYSTEM_PROMPT` reduced to ~3 lines. `buildInstructions()` only shows dynamic data (memory list, guide count). No duplicate rules across 3 sources.
+- **CLI `-lib` flag** — `lemma -lib` outputs Library Mode snapshot to stderr and exits. No MCP server start.
+- **`lemma://context/current` resource** — Dynamic context generation from SQLite.
+
+### Changed — handlers.ts Refactor (Phase 1 + Phase 2)
+
+All 26 handlers refactored from bulk array operations to targeted SQL:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| `saveMemory()` (full table rewrite) | 17 calls | **0** |
+| `saveGuides()` (full table rewrite) | 9 calls | **0** |
+| `loadMemory()` (full array to RAM) | 10 calls | **4** (intel/audit only) |
+| `loadGuides()` (full array to RAM) | 12 calls | **4** (intel/audit only) |
+
+- **Phase 1 (Write side)**: Every write operation now uses single-row INSERT/UPDATE/DELETE. Before: load entire array → mutate → re-insert all rows. After: `store.updateMemory(db, id, {field: value})`.
+- **Phase 2 (Read side)**: 9 new targeted SQL read functions added. Handlers use `getFragmentById()`, `searchMemory()`, `findSimilarByText()` instead of `loadMemory()`.
+- **4 remaining `loadMemory`** calls are intentional: `handleMemoryAdd` (conflict scan), `handleMemoryAudit`, `handleConflictScan`, `handleProactiveAnalysis` — inherently need full dataset.
+- **4 remaining `loadGuides`** calls are intentional: `handleGuideGet` (list-all), `handleGuidePractice` (merge detection), `handleGuideCreate` (fuzzy match), `handleProactiveAnalysis` — inherently need full dataset.
+
+### Changed — Bug Fixes
+
+- **`session_end` infinite loop fix** — `recordToolCall` now skipped when `toolName === "session_end"`, preventing new virtual session from spawning after session ends.
+- **`saveGuides` destructive full-replace** — Changed from full table re-insert to upsert-only. Explicit SQL DELETE where needed.
+- **`store.getMemoryStats` threshold** — `high_confidence` threshold aligned with `calculateStats` (>0.8, was >=0.7).
+- **Double reverse-relation inserts** — Removed; DB trigger handles reverse relation creation.
+- **`config.json` auto-creation** — Creates with defaults on first startup if missing.
+
+### Changed — Documentation
+
+- **README.md** — Updated: 24 tools, intelligence section, SQLite storage, CLI usage.
+- **README.tr.md** — Turkish translation updated to match.
+- **DEVELOPMENT.md** — Updated with SQLite architecture, build/test instructions.
+- **Library Mode plan** — `docs/reports/library-mode-plan.md` added.
+
+### Tests
+
+- **615 tests** passing, 0 failures (was 488)
+- New test files:
+  - `tests/db/library-store.test.ts` (687 assertions) — Library Mode snapshot, stale/duplicate/orphan detection
+  - `tests/db/migration.test.ts` (343 assertions) — JSONL→SQLite migration, idempotency, error recovery
+  - `tests/intelligence/conflict.test.ts` (151 assertions) — Negation patterns, topic overlap, auto-trigger
+  - `tests/intelligence/proactive.test.ts` (229 assertions) — All 7 suggestion types, hot distill detection
+  - `tests/intelligence/semantic.test.ts` (142 assertions) — FTS5 search, project filter
+  - `tests/intelligence/session-analytics.test.ts` (137 assertions) — Project analytics, health scores
+  - `tests/memory/fts5-search.test.ts` (204 assertions) — FTS5 search, ranking, filters
+  - `tests/guides/fts5-search.test.ts` (104 assertions) — Guide FTS5 search
+  - `tests/server/library-handler.test.ts` (137 assertions) — Library Mode handler
+  - `tests/server/pre-migration-fixes.test.ts` (182 assertions) — Bug fix verification
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| New source files | 14 (`src/db/` x5, `src/intelligence/` x5, + tools, schema) |
+| Deleted source files | 1 (`src/memory/embeddings.ts`) |
+| New test files | 10 |
+| New tests | 127 (488→615) |
+| Lines added | ~8,900 |
+| Lines removed | ~2,200 |
+| Build | `npm run build` clean |
+| Dependencies added | `better-sqlite3` |
+| Dependencies removed | `@huggingface/transformers` |
+
+---
+
 ## [0.9.1] - 2026-04-26
 
 ### Added — Vector-First Search, Session Lifecycle, Docs Restructure
