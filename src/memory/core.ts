@@ -142,40 +142,25 @@ export async function findSimilarFragment(fragments: MemoryFragment[], fragmentT
         relationsMap.set(rr.source_id, list);
       }
 
+      const queryWords = new Set(fragmentText.toLowerCase().split(/\s+/).filter(w => w.length > 1));
       for (const row of rows) {
-        const score = row.rank;
-        const similarity = 1 / (1 + Math.exp(score / 2));
-        if (similarity >= threshold) {
+        const fragText = (row.fragment as string) || "";
+        const fragWords = new Set(fragText.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+        if (queryWords.size === 0) continue;
+        let overlap = 0;
+        for (const w of queryWords) {
+          if (fragWords.has(w)) overlap++;
+        }
+        const wordScore = overlap / queryWords.size;
+        if (wordScore >= threshold) {
           const frag = rowToFragment(row, relationsMap.get(row.id) ?? []);
-          logger.flow("dedup", "found_similar", { id: frag.id, similarity });
+          logger.flow("dedup", "found_similar", { id: frag.id, wordScore });
           return frag;
         }
       }
     }
   } catch (err) {
     logger.warn("FTS dedup search failed", { error: String(err) });
-  }
-
-  const queryWords = new Set(fragmentText.toLowerCase().split(/\s+/).filter(w => w.length > 1));
-  if (queryWords.size > 0) {
-    let bestFallback: MemoryFragment | null = null;
-    let bestFallbackScore = 0;
-    for (const frag of scopedFragments) {
-      const fragWords = new Set(frag.fragment.toLowerCase().split(/\s+/).filter(w => w.length > 1));
-      let overlap = 0;
-      for (const w of queryWords) {
-        if (fragWords.has(w)) overlap++;
-      }
-      const score = overlap / queryWords.size;
-      if (score > bestFallbackScore) {
-        bestFallbackScore = score;
-        bestFallback = frag;
-      }
-    }
-    if (bestFallback && bestFallbackScore >= threshold) {
-      logger.flow("dedup", "found_similar_fallback", { id: bestFallback.id, score: bestFallbackScore });
-      return bestFallback;
-    }
   }
 
   logger.flow("dedup", "no_similar");
@@ -867,47 +852,25 @@ export function findSimilarByText(text: string, project: string | null, threshol
         relationsMap.set(rr.source_id, list);
       }
 
+      const queryWords = new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+      if (queryWords.size === 0) return null;
       for (const row of rows) {
-        const score = row.rank;
-        const similarity = 1 / (1 + Math.exp(score / 2));
-        if (similarity >= threshold) {
+        const fragText = (row.fragment as string) || "";
+        const fragWords = new Set(fragText.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+        let overlap = 0;
+        for (const w of queryWords) {
+          if (fragWords.has(w)) overlap++;
+        }
+        const wordScore = overlap / queryWords.size;
+        if (wordScore >= threshold) {
           const frag = rowToFragment(row, relationsMap.get(row.id) ?? []);
-          logger.flow("dedup", "found_similar", { id: frag.id, similarity });
+          logger.flow("dedup", "found_similar", { id: frag.id, wordScore });
           return frag;
         }
       }
     }
   } catch (err) {
     logger.warn("findSimilarByText failed", { error: String(err) });
-  }
-
-  try {
-    const queryWords = new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 1));
-    if (queryWords.size === 0) return null;
-    const db = getDb();
-    const allRows = (project
-      ? db.prepareCached(`SELECT m.*, p.legacy_id as parent_legacy_id FROM memories m LEFT JOIN memories p ON m.parent_id = p.id WHERE m.project = ? OR m.project IS NULL`).all(project.toLowerCase())
-      : db.prepareCached(`SELECT m.*, p.legacy_id as parent_legacy_id FROM memories m LEFT JOIN memories p ON m.parent_id = p.id WHERE m.project IS NULL`).all()) as Record<string, any>[];
-    let bestFallback: MemoryFragment | null = null;
-    let bestFallbackScore = 0;
-    for (const row of allRows) {
-      const frag = rowToFragment(row, []);
-      const fragWords = new Set(frag.fragment.toLowerCase().split(/\s+/).filter(w => w.length > 1));
-      let overlap = 0;
-      for (const w of queryWords) {
-        if (fragWords.has(w)) overlap++;
-      }
-      const score = overlap / queryWords.size;
-      if (score > bestFallbackScore) {
-        bestFallbackScore = score;
-        bestFallback = frag;
-      }
-    }
-    if (bestFallback && bestFallbackScore >= threshold) {
-      return bestFallback;
-    }
-  } catch (err) {
-    logger.warn("findSimilarByText fallback failed", { error: String(err) });
   }
 
   return null;
@@ -1030,20 +993,59 @@ export async function searchAndSortFragments(fragments: MemoryFragment[], query:
   try {
     const db = getDb();
     const ftsResults = store.searchMemories(db, query, { topK });
-    if (ftsResults.length > 0) {
-      logger.flow("search", "fts_results", { count: ftsResults.length });
-      ftsResults.sort((a, b) => injectionScore(b) - injectionScore(a));
-      ftsResults.forEach(frag => { frag.lastAccessed = nowDate; });
-      return ftsResults;
+    const queryLower = query.toLowerCase();
+    const queryWords = new Set(queryLower.split(/\s+/).filter(w => w.length > 1));
+    const inMemoryHits = fragments.filter(frag => {
+      const fragLower = frag.fragment.toLowerCase();
+      if (fragLower.includes(queryLower)) return true;
+      if (queryWords.size > 0) {
+        const fragWords = new Set(fragLower.split(/\s+/).filter(w => w.length > 1));
+        let hits = 0;
+        for (const w of queryWords) { if (fragWords.has(w)) hits++; }
+        return hits / queryWords.size >= 0.5;
+      }
+      return false;
+    });
+    const combined = [...inMemoryHits];
+    const seenIds = new Set(inMemoryHits.map(f => f.id));
+    for (const r of ftsResults) {
+      if (!seenIds.has(r.id)) { combined.push(r); seenIds.add(r.id); }
+    }
+    if (combined.length > 0) {
+      logger.flow("search", "combined_results", { fts: ftsResults.length, inMemory: inMemoryHits.length });
+      const inMemorySet = new Set(inMemoryHits.map(f => f.id));
+      combined.sort((a, b) => {
+        const aInMem = inMemorySet.has(a.id) ? 1 : 0;
+        const bInMem = inMemorySet.has(b.id) ? 1 : 0;
+        if (aInMem !== bInMem) return bInMem - aInMem;
+        return injectionScore(b) - injectionScore(a);
+      });
+      combined.forEach(frag => { frag.lastAccessed = nowDate; });
+      return combined.slice(0, topK);
     }
   } catch (err) {
     logger.warn("FTS search failed", { error: String(err) });
   }
 
   logger.flow("search", "fallback");
-  const fallback = [...fragments]
-    .sort((a, b) => injectionScore(b) - injectionScore(a))
-    .slice(0, topK);
+  const queryLower2 = query.toLowerCase();
+  const queryWords2 = new Set(queryLower2.split(/\s+/).filter(w => w.length > 1));
+  const scored = [...fragments].map(frag => {
+    const fragLower = frag.fragment.toLowerCase();
+    let matchScore = 0;
+    if (fragLower.includes(queryLower2)) {
+      matchScore = 2;
+    } else if (queryWords2.size > 0) {
+      const fragWords = new Set(fragLower.split(/\s+/).filter(w => w.length > 1));
+      for (const w of queryWords2) {
+        if (fragWords.has(w)) matchScore++;
+      }
+      matchScore = matchScore / queryWords2.size;
+    }
+    return { frag, score: matchScore + injectionScore(frag) * 0.01 };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const fallback = scored.slice(0, topK).map(s => s.frag);
 
   fallback.forEach(frag => { frag.lastAccessed = nowDate; });
   return fallback;

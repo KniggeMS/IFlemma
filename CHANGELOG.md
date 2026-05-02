@@ -3,10 +3,11 @@
 ## [0.10.1] - 2026-05-02
 
 ### Fixed
-- **Dedup threshold too aggressive** — `memory_add` was rejecting new fragments with false positive "similar memory already exists" errors. Structured content (video logs, guide entries) with common keywords (AI, video, expert, output) triggered word overlap detection against unrelated global memories.
-  - `findSimilarFragment` default threshold: 0.65 → 0.80
-  - `findSimilarByText` default threshold: 0.75 → 0.80
-  - Root cause: fallback dedup uses `overlap / queryWords.size` — common words in structured fragments scored high enough to block new entries
+- **BM25 sigmoid dedup false positives** — `memory_add` was rejecting new fragments with "similar memory already exists" errors even for completely unrelated content. Root cause: FTS5 `bm25()` returns negative scores (more negative = more relevant), but `1/(1+exp(score/2))` converted all negative scores to 0.95+ similarity, blocking everything.
+  - Replaced sigmoid scoring with word overlap verification: FTS5 used only for candidate retrieval, actual dedup decision based on `overlap / queryWords.size` threshold
+  - Applied to both `findSimilarFragment` and `findSimilarByText` in `src/memory/core.ts`
+  - Research confirmed BM25 is a relevance ranking function (not a similarity metric) — it cannot be directly normalized to 0-1 similarity without a verification step
+- **`searchAndSortFragments` ignored `fragments` parameter in query mode** — When query was provided, FTS5 results from the real DB were returned directly, ignoring the caller's `fragments` array. Now merges in-memory fragments (matching query) with FTS5 results, prioritizing in-memory hits.
 
 ---
 
