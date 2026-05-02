@@ -83,7 +83,7 @@ export function createFragment(fragment: string, source: "user" | "ai", title: s
   };
 }
 
-export async function findSimilarFragment(fragments: MemoryFragment[], fragmentText: string, project: string | null, threshold = 0.65): Promise<MemoryFragment | null> {
+export async function findSimilarFragment(fragments: MemoryFragment[], fragmentText: string, project: string | null, threshold = 0.80): Promise<MemoryFragment | null> {
   const scopedFragments = filterByProject(fragments, project);
   if (scopedFragments.length === 0) return null;
 
@@ -817,7 +817,7 @@ export function migrateConfidenceFloor(): number {
   return migrated;
 }
 
-export function findSimilarByText(text: string, project: string | null, threshold: number = 0.75): MemoryFragment | null {
+export function findSimilarByText(text: string, project: string | null, threshold: number = 0.80): MemoryFragment | null {
   try {
     const db = getDb();
     const ftsQuery = text

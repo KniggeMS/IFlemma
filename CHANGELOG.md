@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.1] - 2026-05-02
+
+### Fixed
+- **Dedup threshold too aggressive** — `memory_add` was rejecting new fragments with false positive "similar memory already exists" errors. Structured content (video logs, guide entries) with common keywords (AI, video, expert, output) triggered word overlap detection against unrelated global memories.
+  - `findSimilarFragment` default threshold: 0.65 → 0.80
+  - `findSimilarByText` default threshold: 0.75 → 0.80
+  - Root cause: fallback dedup uses `overlap / queryWords.size` — common words in structured fragments scored high enough to block new entries
+
+---
+
 ## [0.10.0] - 2026-04-30
 
 ### Breaking Changes
