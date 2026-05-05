@@ -20,11 +20,12 @@ This is a one-way upgrade path. Not every memory becomes a guide — only patter
 
 <mandatory_rules>
 1. ALWAYS read your memory before starting any task. You may already know the answer.
-2. ALWAYS save new knowledge after: solving a bug, discovering a pattern, making an architectural decision, understanding a codebase.
+2. ALWAYS save new knowledge after: solving a bug, discovering a pattern, making an architectural decision, understanding a codebase, completing research.
 3. NEVER say "I'll remember this" — you won't. Save immediately.
 4. NEVER re-explore codebase for something already in your memory. Check memory first.
 5. When memory contradicts observable reality, trust reality and update your memory.
 6. ALWAYS store memory fragments in ENGLISH regardless of conversation language. Consistent language is required for search and retrieval to work correctly. Translate before saving.
+7. NEVER ask permission to save to memory ("Should I save this?", "Let me know if you want me to remember this"). Just save it. This is not optional — it is your job.
 </mandatory_rules>
 
 <workflow>
@@ -113,4 +114,11 @@ Relations connect your knowledge into a graph. Use them meaningfully:
 
 Relations are bidirectional — the reverse relation is created automatically.
 </relations>
+
+<user_commands>
+When the user sends one of these shorthand commands, execute the corresponding action immediately:
+
+- **-lib** → Call memory_library. This gives a full snapshot of your knowledge base with analysis signals, stale fragments, distill candidates, and suggested actions. After reviewing the snapshot, take maintenance actions as needed (merge, forget, distill, relate).
+- **-vis** → Run `npx lemma-mcp -vis` via bash to start the memory visualizer server. Opens an interactive graph in the browser on localhost:3456. All changes write directly to the database.
+</user_commands>
 <!-- lemma:end -->

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0] - 2026-05-05
+
+### Added
+- **Memory Visualizer** (`lemma -vis`) — Interactive D3.js force-directed graph of all memory fragments, served via local HTTP server (default port 3456, customizable with `-p`). Opens automatically in the browser. Cross-platform (macOS, Linux, Windows).
+  - New module: `src/server/visualize.ts` — Node `http` server with REST API, no external dependencies
+  - REST API: `GET /api/data`, `GET /api/stats`, `GET /api/health`, `PATCH /api/fragments/:id`, `DELETE /api/fragments/:id`, `POST /api/relations`, `DELETE /api/relations`, `GET /api/export`
+  - All mutations (edit, delete, link, unlink) write directly to SQLite in real-time
+  - Dual-mode HTML: `http://` serves from API server, `file://` works standalone with JSONL drag-and-drop
+  - HTML asset bundled via `assets/visualizer.html`, copied to `dist/server/` on build
+  - `-vis` shorthand command added to AGENTS.md auto-injection (`agents-md.ts`)
+  - Port conflict handling with `EADDRINUSE` error message
+
+---
+
 ## [0.10.2] - 2026-05-02
 
 ### Fixed

@@ -36,9 +36,13 @@ Add Lemma to your MCP client configuration:
 
 ```bash
 lemma -lib    # Library Mode: snapshot of your entire knowledge base
+lemma -vis    # Visualizer: interactive memory graph in browser
+lemma -vis -p 8080  # Visualizer on custom port (default: 3456)
 ```
 
-Outputs a full analysis of all memories, guides, relations, stale fragments, distill candidates, and suggested actions. Useful for periodic maintenance and review.
+**Library Mode** (`-lib`) outputs a full analysis of all memories, guides, relations, stale fragments, distill candidates, and suggested actions. Useful for periodic maintenance and review.
+
+**Visualizer** (`-vis`) starts a local HTTP server and opens an interactive D3.js force-directed graph of your memory fragments in the browser. Nodes represent memories (sized by confidence + access count, colored by type). Links show relations and associations. All changes (edit, delete, link, unlink) write directly to the SQLite database in real-time. Cross-platform: works on macOS, Linux, and Windows.
 
 ## How It Works
 

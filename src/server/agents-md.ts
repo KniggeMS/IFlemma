@@ -125,6 +125,7 @@ Relations are bidirectional — the reverse relation is created automatically.
 When the user sends one of these shorthand commands, execute the corresponding action immediately:
 
 - **-lib** → Call memory_library. This gives a full snapshot of your knowledge base with analysis signals, stale fragments, distill candidates, and suggested actions. After reviewing the snapshot, take maintenance actions as needed (merge, forget, distill, relate).
+- **-vis** → Run npx lemma-mcp -vis via bash to start the memory visualizer server. Opens an interactive graph in the browser on localhost:3456. All changes write directly to the database.
 </user_commands>`;
 
 export function injectAgentsMd(projectDir: string): { injected: boolean; created: boolean; path: string } {
