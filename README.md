@@ -4,9 +4,17 @@
 
 # Lemma — Persistent Memory for LLMs via MCP
 
+[![npm version](https://img.shields.io/npm/v/lemma-mcp.svg)](https://www.npmjs.com/package/lemma-mcp) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 [English](README.md) | [Türkçe](docs/README.tr.md)
 
 Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills. An autonomous intelligence layer runs in the background — detecting conflicts, suggesting actions, and auto-linking related knowledge.
+
+<p align="center">
+  <img src="assets/visualizer-demo.gif" width="700" alt="Lemma Memory Visualizer Demo">
+</p>
+
+<p align="center"><em>Memory Visualizer — <code>lemma -vis</code></em></p>
 
 ## Quick Start
 
