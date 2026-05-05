@@ -195,6 +195,22 @@ select:focus{outline:none;border-color:var(--accent)}
 #tooltip .tt-title{font-weight:600;color:var(--text);margin-bottom:2px}
 #tooltip .tt-meta{color:var(--text2)}
 
+#ctx-menu{
+  position:fixed;z-index:50;min-width:180px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;
+  display:none;
+}
+#ctx-menu.open{display:block}
+.ctx-item{
+  display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:6px;
+  font-size:13px;color:var(--text);cursor:pointer;border:none;background:none;width:100%;text-align:left;
+}
+.ctx-item:hover{background:var(--bg3)}
+.ctx-item.danger{color:var(--danger)}
+.ctx-sep{height:1px;background:var(--border);margin:3px 8px}
+.ctx-icon{width:16px;text-align:center;font-size:13px;opacity:.7}
+
 ::-webkit-scrollbar{width:6px}
 ::-webkit-scrollbar-track{background:var(--bg)}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
@@ -432,6 +448,17 @@ select:focus{outline:none;border-color:var(--accent)}
       <button class="btn btn-accent" id="edit-save">Save</button>
     </div>
   </div>
+</div>
+
+<div id="ctx-menu">
+  <button class="ctx-item" data-action="detail"><span class="ctx-icon">&#x1F4CB;</span>View Detail</button>
+  <button class="ctx-item" data-action="edit"><span class="ctx-icon">&#x270F;</span>Edit</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" data-action="link"><span class="ctx-icon">&#x1F517;</span>Link from here...</button>
+  <button class="ctx-item" data-action="unlink"><span class="ctx-icon">&#x2716;</span>Remove all links</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" data-action="select"><span class="ctx-icon">&#x2611;</span>Select</button>
+  <button class="ctx-item danger" data-action="delete"><span class="ctx-icon">&#x1F5D1;</span>Delete</button>
 </div>
 
 <script>
@@ -676,6 +703,16 @@ function renderGraph() {
     .attr('dy', d => nodeRadius(d.confidence, d.access_count) + 13)
     .text(d => { const t = d.title||''; return t.length > 18 ? t.slice(0,16)+'..' : t; });
 
+  nodeEls.on('contextmenu', (e, d) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const menu = document.getElementById('ctx-menu');
+    menu._targetNode = d;
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.add('open');
+  });
+
   nodeEls.on('click', (e, d) => {
     e.stopPropagation();
     if (linkMode) {
@@ -708,6 +745,7 @@ function renderGraph() {
   nodeEls.on('pointerleave', () => tooltip.classList.remove('visible'));
 
   svg.on('click', () => {
+    document.getElementById('ctx-menu').classList.remove('open');
     if (!linkMode) hideDetail();
     selectedLinkData = null;
     document.getElementById('unlink-bar').style.display = 'none';
@@ -985,6 +1023,48 @@ if (SERVER_MODE) {
     }
   })();
 }
+
+document.getElementById('ctx-menu').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.ctx-item');
+  if (!btn) return;
+  const menu = document.getElementById('ctx-menu');
+  const d = menu._targetNode;
+  menu.classList.remove('open');
+  if (!d) return;
+
+  const action = btn.dataset.action;
+  if (action === 'detail') showDetail(d);
+  else if (action === 'edit') openEditModal(d);
+  else if (action === 'delete') { if (confirm('Delete "' + d.title + '"?')) await deleteFragment(d.id); }
+  else if (action === 'select') {
+    if (!selectedNodes.has(d.id)) selectedNodes.add(d.id);
+    updateStats(); updateBulkBar(); renderGraph();
+  }
+  else if (action === 'link') {
+    linkSource = d.id;
+    linkMode = true;
+    document.getElementById('graph-container').classList.add('link-mode');
+    document.getElementById('link-bar').style.display = 'flex';
+    document.getElementById('link-step-text').textContent = `Source: "${d.title.slice(0,25)}" — click target node`;
+    document.getElementById('btn-link').classList.add('active');
+    nodeGroup.selectAll('.node-group').classed('link-source', n => n.id === d.id);
+  }
+  else if (action === 'unlink') {
+    const count = relations.filter(r => r.source === d.id || r.target === d.id).length;
+    if (count === 0) return;
+    if (!confirm(`Remove all ${count} link(s) from "${d.title}"?`)) return;
+    const toRemove = relations.filter(r => r.source === d.id || r.target === d.id);
+    for (const r of toRemove) {
+      if (SERVER_MODE) await api('DELETE', 'relations', { source: r.source, target: r.target, type: r.type });
+    }
+    relations = relations.filter(r => r.source !== d.id && r.target !== d.id);
+    updateUI();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#ctx-menu')) document.getElementById('ctx-menu').classList.remove('open');
+});
 </script>
 </body>
 </html>

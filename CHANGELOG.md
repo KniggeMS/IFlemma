@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1] - 2026-05-05
+
+### Added
+- **Right-click context menu** on nodes — View Detail, Edit, Link from here, Remove all links, Select, Delete
+- **Background mode instruction** in AGENTS.md — `-vis` command now runs with `&` to prevent bash timeout from killing the server
+
+### Fixed
+- **`await` in non-async function** — `handleLinkClick` was not marked `async`, causing SyntaxError in server mode
+
+---
+
 ## [0.11.0] - 2026-05-05
 
 ### Added
