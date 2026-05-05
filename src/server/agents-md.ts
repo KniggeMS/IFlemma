@@ -125,7 +125,7 @@ Relations are bidirectional — the reverse relation is created automatically.
 When the user sends one of these shorthand commands, execute the corresponding action immediately:
 
 - **-lib** → Call memory_library. This gives a full snapshot of your knowledge base with analysis signals, stale fragments, distill candidates, and suggested actions. After reviewing the snapshot, take maintenance actions as needed (merge, forget, distill, relate).
-- **-vis** → Run npx lemma-mcp -vis via bash with a trailing ampersand (&) to run in background so it does not get killed by timeout. Example: npx lemma-mcp -vis &. Then confirm it started by curling http://localhost:3456/api/health. Opens an interactive memory graph in the browser.
+- **-vis** → Run npx lemma-mcp -vis via bash. It auto-daemonizes and stays alive in background. Then sleep 2 and curl http://localhost:3456/api/health to confirm.
 </user_commands>`;
 
 export function injectAgentsMd(projectDir: string): { injected: boolean; created: boolean; path: string } {

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.2] - 2026-05-05
+
+### Added
+- **Auto-daemonize** — `lemma -vis` now spawns a detached background process (`detached: true`, `unref()`). Works cross-platform (macOS, Linux, Windows). Parent exits immediately, server stays alive. No `nohup`/`disown` needed.
+- **`--fg` flag** — Run `lemma -vis --fg` to start in foreground (for manual terminal use with Ctrl+C).
+
+### Changed
+- **AGENTS.md `-vis` instruction** simplified — AI just runs `npx lemma-mcp -vis`, no platform-specific bash tricks needed.
+
+---
+
 ## [0.11.1] - 2026-05-05
 
 ### Added
