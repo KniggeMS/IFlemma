@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.3] - 2026-05-06
+
+### Added
+- **Senior Engineering Mindset seed** (`seed_senior_engineer_role`) — New built-in memory fragment that activates Principal Engineer / System Architect role exclusively for software & coding tasks. Covers pre-code comprehension protocol, production-grade standards, change principles, and impact assessment. Scope-limited: only active for coding/debugging/architecture tasks, inactive for general conversation and content work.
+- Seed count: 3 → 4 built-in knowledge fragments.
+
+---
+
 ## [0.11.2] - 2026-05-05
 
 ### Added
