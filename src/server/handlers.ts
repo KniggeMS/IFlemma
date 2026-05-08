@@ -286,7 +286,10 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
 
   const db = getDb();
   for (const frag of relevantResults) {
-    store.boostConfidence(db, parseInt(frag.id, 10) || 0, 0.02);
+    const row = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(frag.id) as { id: number } | undefined;
+    if (row) {
+      store.boostConfidence(db, row.id, 0.02);
+    }
   }
 
   let response = `Session started: ${session.session_id} (${taskType})\n`;
@@ -527,7 +530,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     core.boostOnAccess(frag, context);
   }
 
-  if (resultIds.size > 1) {
+  if (query && resultIds.size > 1) {
     const idArray = [...resultIds];
     for (const id of idArray) {
       const target = (results as any[]).find((f: any) => f.id === id);
@@ -558,7 +561,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   }
 
   let autoRelateCount = 0;
-  if (resultIds.size > 1) {
+  if (query && resultIds.size > 1) {
     const relateDb = getDb();
     const idArray = [...resultIds];
     const hub = idArray[0];

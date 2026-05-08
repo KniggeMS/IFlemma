@@ -1,7 +1,7 @@
 export { getDb, closeDb, setDataDir, LemmaDB } from "./database.js";
 export { SCHEMA_V1, MIGRATIONS } from "./schema.js";
 export { runMigrations, migrateFromJsonl } from "./migration.js";
-export { addMemory, getMemoryById, updateMemory, deleteMemory, searchMemories, addRelation, getRelations, boostConfidence, decayMemories, getMemoryStats, mergeMemories } from "./memory-store.js";
+export { addMemory, getMemoryById, updateMemory, deleteMemory, searchMemories, addRelation, getRelations, boostConfidence, decayMemories, getMemoryStats, mergeMemories, shouldRunDecay, markDecayRun } from "./memory-store.js";
 
 import { getDb } from "./database.js";
 import { runMigrations, migrateFromJsonl } from "./migration.js";

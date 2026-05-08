@@ -854,7 +854,7 @@ export function findSimilarGuideByName(name: string): Guide | null {
   try {
     const db = getDb();
     const row = db.prepareCached(
-      `SELECT * FROM guides WHERE name LIKE '%' || ? || '%' COLLATE NOCASE LIMIT 1`
+      `SELECT * FROM guides WHERE guide LIKE '%' || ? || '%' COLLATE NOCASE LIMIT 1`
     ).get(normalized) as Record<string, unknown> | undefined;
 
     if (row) {

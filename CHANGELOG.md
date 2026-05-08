@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.4] - 2026-05-08
+
+### Fixed
+- **BUG-2: Double confidence boost on memory search** — `searchMemories()` was incrementing `accessed` counter and boosting confidence on top of `handleMemoryRead`'s own boost. Removed boost from search level; boost now only happens at handler level representing explicit "user read" intent. (`src/db/memory-store.ts`)
+- **BUG-3: Phantom in-memory decay in processFragments** — `processFragments()` was calling `decayConfidence()` on in-memory objects loaded from DB, but since objects are re-loaded on next call, the decay was never persisted — pure waste. Removed the phantom call. (`src/server/system-prompt.ts`)
+- **BUG-4: Wrong column in guide name search** — `findSimilarGuideByName()` used `WHERE name LIKE` but the guides table stores names in `guide` column, not `name`. Changed to `WHERE guide LIKE`. (`src/guides/core.ts`)
+- **HIGH-1: Session start boost with legacy_id** — `handleSessionStart` called `boostConfidence()` with a `legacy_id` string instead of numeric `id`. Added `legacy_id → id` resolution before boost. (`src/server/handlers.ts`)
+- **HIGH-2: Auto-relation without query** — Auto-association and auto-relation blocks in `handleMemoryRead` ran even when no `query` was provided (plain listing). Added `query &&` guard. (`src/server/handlers.ts`)
+- **HIGH-3: Statement cache unbounded growth** — `prepareCached()` in LemmaDB had no eviction limit. Added `MAX_CACHE_SIZE = 200` with LRU-like eviction (removes 50 oldest when full). (`src/db/database.ts`)
+- **HIGH-4: Decay running on every startup** — `decayMemories()` ran on every server startup regardless of timing. Added `shouldRunDecay()` / `markDecayRun()` using `schema_version` table as 24h timestamp gate. Decay now runs at most once per 24 hours. (`src/db/memory-store.ts`)
+
+### Changed
+- Test updated: `searchAndSortFragments` no longer boosts — test now verifies `accessed === 0` and `confidence` unchanged after search. (`tests/memory/fts5-search.test.ts`)
+
+---
+
 ## [0.11.3] - 2026-05-06
 
 ### Added

@@ -9,6 +9,7 @@ import { runMigrations } from "./migration.js";
 const DEFAULT_DB_PATH = path.join(os.homedir(), ".lemma", "lemma.db");
 
 export class LemmaDB {
+  private static readonly MAX_CACHE_SIZE = 200;
   readonly db: Database.Database;
   private stmtCache: Map<string, Database.Statement> = new Map();
 
@@ -35,6 +36,10 @@ export class LemmaDB {
   prepareCached(sql: string): Database.Statement {
     let stmt = this.stmtCache.get(sql);
     if (!stmt) {
+      if (this.stmtCache.size >= LemmaDB.MAX_CACHE_SIZE) {
+        const keys = [...this.stmtCache.keys()].slice(0, 50);
+        for (const k of keys) this.stmtCache.delete(k);
+      }
       stmt = this.db.prepare(sql);
       this.stmtCache.set(sql, stmt);
     }

@@ -61,9 +61,7 @@ ${lines.join("\n")}
 function processFragments(fragments: MemoryFragment[], limit: number): MemoryFragment[] {
   if (!fragments || fragments.length === 0) return [];
 
-  const decayed = core.decayConfidence(fragments) as MemoryFragment[];
-
-  const result = [...decayed]
+  const result = [...fragments]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, limit);
 

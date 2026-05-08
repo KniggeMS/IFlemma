@@ -101,7 +101,7 @@ describe("FTS5 Memory Search", () => {
     assert.ok(results.length >= 1);
   });
 
-  test("search boosts confidence on returned fragments", async () => {
+  test("search returns relevant fragments without side effects", async () => {
     const frag = makeFrag("Unique test fragment about quantum computing algorithms", null);
     frag.confidence = 0.5;
     core.saveMemory([frag]);
@@ -109,10 +109,12 @@ describe("FTS5 Memory Search", () => {
     const results = await core.searchAndSortFragments([frag], "quantum computing", 10);
     assert.ok(results.length >= 1);
 
+    // searchAndSortFragments does NOT boost — that happens at handler level
     const loaded = core.loadMemory();
-    const updated = loaded.find(f => f.id === frag.id);
-    assert.ok(updated);
-    assert.ok(updated.accessed >= 1);
+    const unchanged = loaded.find(f => f.id === frag.id);
+    assert.ok(unchanged);
+    assert.strictEqual(unchanged.accessed, 0);
+    assert.strictEqual(unchanged.confidence, 0.5);
   });
 
   test("search finds updated content after fragment update", async () => {

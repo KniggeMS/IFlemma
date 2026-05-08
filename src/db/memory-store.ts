@@ -375,16 +375,6 @@ export function searchMemories(
     childrenMap.set(cr.parent_id, list);
   }
 
-  lemmaDb
-    .prepareCached(
-      `UPDATE memories SET confidence = MIN(1.0, confidence + 0.015),
-       access_count = access_count + 1,
-       last_accessed_at = datetime('now'),
-       updated_at = datetime('now')
-       WHERE id IN (${placeholders})`,
-    )
-    .run(...ids);
-
   const relRows = lemmaDb
     .prepareCached(
       `SELECT r.source_id, r.type, r.note, r.created_at, m.legacy_id as target_legacy_id
@@ -495,7 +485,32 @@ export function boostConfidence(
     .run(amount, id);
 }
 
+const DECAY_INTERVAL_HOURS = 24;
+
+export function shouldRunDecay(lemmaDb: LemmaDB): boolean {
+  const row = lemmaDb.prepareCached(
+    `SELECT applied_at FROM schema_version WHERE version = -1`
+  ).get() as { applied_at: string } | undefined;
+
+  if (!row) return true;
+
+  const lastDecay = new Date(row.applied_at).getTime();
+  const hoursSince = (Date.now() - lastDecay) / (1000 * 60 * 60);
+  return hoursSince >= DECAY_INTERVAL_HOURS;
+}
+
+export function markDecayRun(lemmaDb: LemmaDB): void {
+  lemmaDb.prepareCached(
+    `INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (-1, datetime('now'))`
+  ).run();
+}
+
 export function decayMemories(lemmaDb: LemmaDB): number {
+  if (!shouldRunDecay(lemmaDb)) {
+    logger.info("Memory decay skipped (too recent)");
+    return 0;
+  }
+
   const { db } = lemmaDb;
   return db.transaction(() => {
     const result = lemmaDb
@@ -506,6 +521,7 @@ export function decayMemories(lemmaDb: LemmaDB): number {
       )
       .run();
     lemmaDb.prepareCached("UPDATE memories SET access_count = 0").run();
+    markDecayRun(lemmaDb);
     logger.info("Memory decay complete", { decayed: result.changes });
     return result.changes;
   })();
