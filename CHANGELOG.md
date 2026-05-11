@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.5] - 2026-05-11
+
+### Added
+- **HTML vs Markdown Output Strategy seed** — New built-in memory fragment (`seed_html_output_strategy`) and guide seed (`html-output-strategy`) that teaches LLMs context-aware format selection. Uses HTML for complex specs, diagrams, reports, and prototypes; Markdown for quick answers, code edits, and version-controlled docs. Inspired by Thariq's research on HTML effectiveness for AI agent communication.
+- Cross-reference between memory seed and guide seed via `related_guides` / `source_memories` fields.
+- `SeedEntry` interface now supports `related_guides` for linking memory seeds to guides.
+- `SeedGuide` interface now supports `source_memories` for linking guide seeds to memory fragments.
+
+### Changed
+- Replaced `seed_senior_engineer_role` memory seed with `seed_html_output_strategy` — more universally applicable across all LLM use cases.
+- Seed counts: 3 memory seeds, 4 guide seeds (was 3 memory, 3 guide).
+
+---
+
 ## [0.11.4] - 2026-05-08
 
 ### Fixed

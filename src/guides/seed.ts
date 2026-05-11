@@ -10,6 +10,7 @@ interface SeedGuide {
   learnings: string[];
   anti_patterns: string[];
   known_pitfalls: string[];
+  source_memories?: string[];
 }
 
 const SEED_GUIDES: SeedGuide[] = [
@@ -155,6 +156,68 @@ Improve code structure without changing behavior. Every step must be safe, verif
 - Behavior preservation is absolute — any behavior change, intentional or not, disqualifies it as refactoring
 - Stop when the code communicates intent clearly — don't refactor for aesthetic perfection`,
   },
+  {
+    guide: "html-output-strategy",
+    category: "content-formatting",
+    keywords: ["html", "markdown", "output", "format", "spec", "report", "diagram", "visualization", "görselleştirme", "rapor"],
+    contexts: ["format selection", "output quality", "information density", "visual clarity", "document sharing"],
+    learnings: [
+      "HTML is 2-4x more token-expensive than Markdown — only use when the visual payoff justifies it",
+      "Nobody reads 100+ line Markdown specs — HTML with visual structure gets actually reviewed",
+      "Self-contained HTML files (no CDN) are shareable via a single link — Markdown requires special viewers",
+      "Interactive HTML prototypes (sliders, buttons) enable two-way feedback loops with the LLM",
+      "When in doubt, default to Markdown — HTML should be an intentional choice, not the default",
+    ],
+    anti_patterns: [
+      "Generating HTML for every output regardless of complexity — wastes tokens and slows iteration",
+      "Using Markdown for 200+ line architectural specs — information density becomes unreadable",
+      "Adding JavaScript interactivity to documents meant for passive reading — over-engineering",
+      "External CDN dependencies in HTML files — breaks offline and reduces portability",
+    ],
+    known_pitfalls: [
+      "HTML diff noise in version control — use Markdown for git-tracked docs",
+      "Over-designing HTML output when the task just needs a quick answer",
+      "Forgetting to make HTML responsive — mobile viewing breaks without basic CSS",
+    ],
+    source_memories: ["seed_html_output_strategy"],
+    description: `## HTML vs Markdown Output Strategy — Context-Aware Format Selection
+
+### Mission
+Select the optimal output format (HTML or Markdown) based on the task's purpose, audience, and longevity — maximizing readability and impact without wasting tokens.
+
+### Protocol
+
+1. **ASSESS the task:** Before generating output, ask three questions:
+   - Will this output be read again later or shared with others? (longevity)
+   - Does it benefit from visual structure (tables, diagrams, side-by-side comparisons)? (richness)
+   - Is the user going to interact with it or just consume it? (interactivity)
+
+2. **DECIDE the format:**
+
+   | Condition | Format | Reason |
+   |---|---|---|
+   | Short answer, quick task, code edit | Markdown | Speed, token efficiency |
+   | Long spec, plan, architecture doc | HTML | Readability, visual hierarchy |
+   | Diagram, flowchart, visualization needed | HTML | SVG, CSS layout |
+   | Side-by-side comparison (2+ approaches) | HTML | Grid/column layout |
+   | Report shared with team or stakeholders | HTML | Link-sharing, browser-rendered |
+   | Interactive prototype or parameter tuning | HTML | Sliders, buttons, live preview |
+   | Version-controlled documentation | Markdown | Clean git diffs |
+   - When in doubt → Markdown (default safe choice)
+
+3. **EXECUTE with quality:**
+   - If HTML: include basic responsive CSS, semantic structure, clean design. Single self-contained file.
+   - If Markdown: keep it concise, use headers/tables/code blocks properly.
+
+4. **COMMUNICATE the choice:** If switching to HTML for a non-obvious reason, briefly note why.
+
+### Rules
+- NEVER default to HTML for every output — token cost is 2-4x higher
+- NEVER use HTML for code edits, quick answers, or chat-style responses
+- ALWAYS keep HTML files self-contained (no external CSS/JS CDN links)
+- ALWAYS consider the user's implicit intent: "make a plan" → probably HTML, "fix this bug" → Markdown
+- If the user explicitly requests a format → honor it, skip the decision framework`,
+  },
 ];
 
 export function seedGuides(guides: Guide[]): { seeded: number; skipped: number } {
@@ -188,7 +251,7 @@ export function seedGuides(guides: Guide[]): { seeded: number; skipped: number }
       enables: [],
       superseded_by: null,
       deprecated: false,
-      source_memories: [],
+      source_memories: seed.source_memories || [],
       validated_by: [],
     };
 

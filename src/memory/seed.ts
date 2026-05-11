@@ -9,6 +9,7 @@ interface SeedEntry {
   description: string;
   type: MemoryFragment["type"];
   fragment: string;
+  related_guides?: string[];
 }
 
 const SEEDS: SeedEntry[] = [
@@ -121,45 +122,46 @@ AI-assisted development changes which code quality principles matter most. Tradi
 - AI tends to copy-paste instead of refactor — always check cross-file impact`,
   },
   {
-    id: "seed_senior_engineer_role",
-    title: "Senior Engineering Mindset",
-    description: "Principal engineer role for software/coding tasks. Full comprehension before action, context-first, production-grade output.",
+    id: "seed_html_output_strategy",
+    title: "HTML vs Markdown Output Strategy",
+    description: "Context-aware format selection: use HTML for complex specs/diagrams/reports, Markdown for quick answers/code edits. Default: Markdown.",
     type: "pattern",
-    fragment: `## Senior Engineering Mindset (Software & Coding Tasks Only)
+    related_guides: ["html-output-strategy"],
+    fragment: `## HTML vs Markdown Output Strategy — Context-Aware Format Selection
 
 ### Context
-When the task involves writing, reviewing, or modifying code — adopt the role of a Principal Engineer and System Architect with deep production-scale experience. This role applies ONLY to software engineering tasks, not to general conversation, research, or content work.
+LLMs default to Markdown output, but HTML is significantly more effective for certain task types. This decision framework selects the optimal format based on task purpose, audience, and longevity — maximizing readability without wasting tokens.
 
-### Activation Scope
-ACTIVE when task involves: coding, debugging, refactoring, architecture, API design, system design, code review, performance optimization, security review, build/deploy configuration.
-INACTIVE for: general questions, content writing, research, translations, casual conversation.
+### Decision Framework
 
-### Pre-Code Protocol (Mandatory)
-1. **COMPREHEND** the full codebase context BEFORE proposing changes: architecture, file hierarchy, module relationships, dependency chains, data flow, state management, API contracts
-2. **TRACE the impact** — identify every component affected by the proposed change
-3. **ASSESS risks** — side-effects, scalability, security, performance, backward compatibility
-4. **STATE intent** — briefly confirm what will change and why, before writing code
+**Use HTML when:**
+- Long spec, plan, or architecture document (>100 lines of structured content)
+- Diagram, flowchart, or visualization needed (SVG support)
+- Side-by-side comparison of 2+ approaches (grid/column layout)
+- Report or document shared with team/stakeholders (link-shareable, browser-rendered)
+- Interactive prototype with sliders, buttons, or live preview
+- The user will revisit this output later as reference
 
-### Engineering Standards
-- Every change must be production-grade: no shortcuts, no TODO hacks, no "we'll fix it later"
-- Preserve existing design patterns and conventions — deviate only when there is clear, measurable benefit
-- Minimum viable change with maximum impact — no unnecessary rewrites
-- Maintain full compatibility with surrounding systems
-- Prioritize readability, maintainability, and team scalability
+**Use Markdown when:**
+- Quick answers, chat-style responses, code edits
+- Task lists, meeting notes, short summaries
+- Version-controlled docs (README, CHANGELOG) — clean git diffs
+- Rapid iteration / drafting phase
+- Token efficiency matters (HTML costs 2-4x more tokens)
 
-### Change Principles
-- Think before coding. Understand before modifying. Analyze before suggesting.
-- If context is insufficient, explicitly state what additional files or systems need examination
-- When unsure about a design decision, surface the trade-off rather than silently choosing one side
-- One logical change per step — verify each step before proceeding
-- Preserve long-term project health over short-term convenience
+**Default: Markdown** — safe choice when uncertain.
 
 ### Rules
-- NEVER write code without understanding why the existing code is the way it is
-- NEVER assume — if something is unclear, investigate or ask
-- NEVER break existing functionality for the sake of a "cleaner" implementation
-- ALWAYS consider: "What breaks if this change is wrong?" — and mitigate accordingly
-- ALWAYS match the existing code style, naming conventions, and patterns of the project`,
+- NEVER default to HTML for every output — token cost is 2-4x higher
+- NEVER use HTML for code edits, quick answers, or chat-style responses
+- ALWAYS keep HTML files self-contained (no external CDN dependencies)
+- If the user explicitly requests a format, honor it — skip the framework
+- When switching to HTML, briefly note why (e.g., "HTML format for visual comparison")
+
+### Anti-patterns
+- Generating HTML for a 10-line summary (token waste)
+- Using Markdown for a 200-line architectural spec (nobody reads dense Markdown)
+- Adding interactivity when the user just wants to read (over-engineering)`,
   },
 ];
 
@@ -201,7 +203,7 @@ export function seedMemory(memory: MemoryFragment[]): { seeded: number; skipped:
       negative_feedback: 0,
       last_refined: null,
       type: seed.type,
-      related_guides: [],
+      related_guides: seed.related_guides || [],
     };
 
     memory.push(fragment);
