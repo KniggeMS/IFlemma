@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import { LemmaDB } from "../../src/db/database.js";
 import { runMigrations, migrateFromJsonl } from "../../src/db/migration.js";
+import { MIGRATIONS } from "../../src/db/schema.js";
 
 let TMPDIR: string;
 let db: LemmaDB;
@@ -339,5 +340,73 @@ describe("migrateFromJsonl", () => {
 
     const second = migrateFromJsonl(db, TMPDIR);
     assert.equal(second.memories, 0);
+  });
+});
+
+describe("runMigrations — V2 schema_version tracking", () => {
+  test("applies V1 then V2 on a fresh DB and records schema_version 2", () => {
+    const tmpDb = new LemmaDB(path.join(TMPDIR, "fresh-v2.db"));
+    runMigrations(tmpDb);
+    const versions = tmpDb
+      .prepareCached("SELECT version FROM schema_version ORDER BY version")
+      .all() as { version: number }[];
+    assert.deepEqual(versions.map(v => v.version), [1, 2]);
+    const tables = tmpDb
+      .prepareCached("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('session_attempts','improvement_suggestions')")
+      .all() as { name: string }[];
+    assert.deepEqual(tables.map(t => t.name).sort(), ["improvement_suggestions", "session_attempts"]);
+    tmpDb.close();
+  });
+
+  test("V2 is idempotent — re-running runMigrations is a no-op", () => {
+    const tmpDb = new LemmaDB(path.join(TMPDIR, "idempotent.db"));
+    runMigrations(tmpDb);
+    runMigrations(tmpDb);
+    const versions = tmpDb.prepareCached("SELECT version FROM schema_version").all() as { version: number }[];
+    assert.equal(versions.length, 2);
+    const attemptTables = tmpDb
+      .prepareCached("SELECT count(*) as c FROM sqlite_master WHERE type='table' AND name='session_attempts'")
+      .get() as { c: number };
+    assert.equal(attemptTables.c, 1);
+    tmpDb.close();
+  });
+
+  test("V2 migration preserves all existing V1 data (back-compat)", () => {
+    // 1. Build a V1-only DB and populate it with real data.
+    const v1Db = new LemmaDB(path.join(TMPDIR, "v1-seed.db"));
+    runMigrations(v1Db);
+
+    v1Db.prepareCached(
+      "INSERT INTO memories (legacy_id, title, fragment, type, project, confidence) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("m_keep_1", "Keep Me", "content to preserve", "fact", "proj", 0.77);
+    v1Db.prepareCached(
+      "INSERT INTO sessions (id, task_type, status, started_at) VALUES (?, ?, 'completed', ?)"
+    ).run("sess_keep_1", "debugging", "2026-06-01T00:00:00.000Z");
+    const beforeMem = v1Db.prepareCached("SELECT legacy_id, title, confidence FROM memories WHERE legacy_id='m_keep_1'").get();
+    const beforeSess = v1Db.prepareCached("SELECT id, task_type, status FROM sessions WHERE id='sess_keep_1'").get();
+    v1Db.close();
+
+    // 2. Re-open the same DB file and run migrations again (simulates an existing user upgrading).
+    const upgradedDb = new LemmaDB(path.join(TMPDIR, "v1-seed.db"));
+    runMigrations(upgradedDb);
+
+    // 3. Existing data is byte-for-byte unchanged.
+    const afterMem = upgradedDb.prepareCached("SELECT legacy_id, title, confidence FROM memories WHERE legacy_id='m_keep_1'").get();
+    const afterSess = upgradedDb.prepareCached("SELECT id, task_type, status FROM sessions WHERE id='sess_keep_1'").get();
+    assert.deepEqual(afterMem, beforeMem);
+    assert.deepEqual(afterSess, beforeSess);
+
+    // 4. New tables exist and are empty (no phantom rows).
+    const attemptCount = upgradedDb.prepareCached("SELECT count(*) as c FROM session_attempts").get() as { c: number };
+    const suggestionCount = upgradedDb.prepareCached("SELECT count(*) as c FROM improvement_suggestions").get() as { c: number };
+    assert.equal(attemptCount.c, 0);
+    assert.equal(suggestionCount.c, 0);
+    upgradedDb.close();
+  });
+
+  test("MIGRATIONS array is sorted ascending and includes V2", () => {
+    const versions = MIGRATIONS.map(([v]) => v);
+    assert.deepEqual(versions, [...versions].sort((a, b) => a - b));
+    assert.ok(versions.includes(2));
   });
 });
