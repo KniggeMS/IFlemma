@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
+import type { SuggestionStatus } from "../../src/types.js";
+
 import {
   setSessionsDir,
   createSession,
@@ -12,6 +14,9 @@ import {
   loadRecentAttempts,
   decayAttempts,
   boostAttempt,
+  saveImprovementSuggestion,
+  loadPendingSuggestions,
+  updateSuggestionStatus,
 } from "../../src/sessions/index.js";
 import { getDb } from "../../src/db/database.js";
 
@@ -102,5 +107,34 @@ describe("Attempt persistence", () => {
     getDb().prepareCached("DELETE FROM sessions WHERE id = ?").run(s.session_id);
     const count = getDb().prepareCached("SELECT count(*) as c FROM session_attempts WHERE session_id = ?").get(s.session_id) as { c: number };
     assert.equal(count.c, 0);
+  });
+});
+
+describe("Improvement-suggestion persistence", () => {
+  test("saveImprovementSuggestion + loadPendingSuggestions round-trip", () => {
+    const s = createSession("debugging");
+    saveImprovementSuggestion(s.session_id, "Consider guide_distill for the react pattern.");
+    saveImprovementSuggestion(s.session_id, "Guide 'react' low success — refine it.");
+    const pending = loadPendingSuggestions();
+    assert.equal(pending.length, 2);
+    assert.equal(pending[0].status, "offered");
+    assert.equal(pending[0].session_id, s.session_id);
+  });
+
+  test("updateSuggestionStatus moves a suggestion out of pending", () => {
+    const s = createSession("debugging");
+    const id = saveImprovementSuggestion(s.session_id, "tip one");
+    updateSuggestionStatus(id, "dismissed" as SuggestionStatus);
+    const pending = loadPendingSuggestions();
+    assert.equal(pending.length, 0);
+  });
+
+  test("updateSuggestionStatus accepted sets resolved_at", () => {
+    const s = createSession("debugging");
+    const id = saveImprovementSuggestion(s.session_id, "tip two");
+    updateSuggestionStatus(id, "accepted" as SuggestionStatus);
+    const row = getDb().prepareCached("SELECT status, resolved_at FROM improvement_suggestions WHERE id = ?").get(id) as { status: string; resolved_at: string | null };
+    assert.equal(row.status, "accepted");
+    assert.ok(row.resolved_at);
   });
 });

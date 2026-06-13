@@ -3,7 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { logger } from "../logger.js";
 import type { Session } from "../types.js";
-import type { Attempt, AttemptOutcome } from "../types.js";
+import type { Attempt, AttemptOutcome, ImprovementSuggestion, SuggestionStatus } from "../types.js";
 import { getDb, setDataDir } from "../db/database.js";
 
 let SESSIONS_DIR = path.join(os.homedir(), ".lemma");
@@ -429,4 +429,37 @@ export function boostAttempt(sessionId: string, seq: number, delta: number): voi
      SET confidence = MIN(1, confidence + ?), access_count = access_count + 1, last_accessed_at = datetime('now')
      WHERE session_id = ? AND seq = ?`
   ).run(delta, sessionId, seq);
+}
+
+function rowToSuggestion(row: Record<string, unknown>): ImprovementSuggestion {
+  return {
+    id: row.id as number,
+    session_id: (row.session_id as string) ?? null,
+    suggestion: row.suggestion as string,
+    status: row.status as SuggestionStatus,
+    created_at: (row.created_at as string) ?? new Date().toISOString(),
+    resolved_at: (row.resolved_at as string) ?? null,
+  };
+}
+
+export function saveImprovementSuggestion(sessionId: string, suggestion: string): number {
+  const db = getDb();
+  const result = db.prepareCached(
+    "INSERT INTO improvement_suggestions (session_id, suggestion, status) VALUES (?, ?, 'offered')"
+  ).run(sessionId, suggestion);
+  return Number(result.lastInsertRowid);
+}
+
+export function loadPendingSuggestions(limit = 3): ImprovementSuggestion[] {
+  const db = getDb();
+  const rows = db
+    .prepareCached("SELECT * FROM improvement_suggestions WHERE status = 'offered' ORDER BY created_at DESC LIMIT ?")
+    .all(limit) as Record<string, unknown>[];
+  return rows.map(rowToSuggestion);
+}
+
+export function updateSuggestionStatus(id: number, status: SuggestionStatus): void {
+  const db = getDb();
+  const resolvedAt = status === "offered" ? null : new Date().toISOString();
+  db.prepareCached("UPDATE improvement_suggestions SET status = ?, resolved_at = ? WHERE id = ?").run(status, resolvedAt, id);
 }

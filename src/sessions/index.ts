@@ -16,5 +16,8 @@ export {
   loadAttemptsForSession,
   loadRecentAttempts,
   decayAttempts,
-  boostAttempt
+  boostAttempt,
+  saveImprovementSuggestion,
+  loadPendingSuggestions,
+  updateSuggestionStatus,
 } from "./core.js";
