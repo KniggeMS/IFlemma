@@ -242,7 +242,8 @@ CREATE TABLE IF NOT EXISTS session_attempts (
   last_accessed_at TEXT,
   access_count INTEGER DEFAULT 0 NOT NULL,
   created_at TEXT DEFAULT (datetime('now')) NOT NULL,
-  UNIQUE(session_id, seq)
+  UNIQUE(session_id, seq),
+  CHECK (confidence >= 0 AND confidence <= 1)
 );
 
 CREATE INDEX IF NOT EXISTS idx_attempts_session ON session_attempts(session_id);
