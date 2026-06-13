@@ -363,7 +363,7 @@ function rowToAttempt(row: Record<string, unknown>): Attempt {
 export function recordAttempt(
   sessionId: string,
   data: { approach: string; rationale?: string | null; outcome: AttemptOutcome; critique?: string | null; related_memory_id?: string | null },
-): Attempt | null {
+): Attempt {
   const db = getDb();
   const seqRow = db
     .prepareCached("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM session_attempts WHERE session_id = ?")

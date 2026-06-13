@@ -60,6 +60,20 @@ describe("Attempt persistence", () => {
     assert.equal(recent.length, 0);
   });
 
+  test("loadRecentAttempts orders matching attempts by confidence descending", () => {
+    const a = createSession("debugging", ["react"]);
+    const b = createSession("debugging", ["react"]);
+    recordAttempt(a.session_id, { approach: "low confidence approach", outcome: "rejected", critique: "c" });
+    recordAttempt(b.session_id, { approach: "high confidence approach", outcome: "rejected", critique: "c" });
+    const db = getDb();
+    db.prepareCached("UPDATE session_attempts SET confidence = 0.3 WHERE approach = 'low confidence approach'").run();
+    db.prepareCached("UPDATE session_attempts SET confidence = 0.9 WHERE approach = 'high confidence approach'").run();
+    const recent = loadRecentAttempts({ task_type: "debugging", limit: 10, minConfidence: 0 });
+    assert.equal(recent.length, 2);
+    assert.equal(recent[0].approach, "high confidence approach");
+    assert.equal(recent[1].approach, "low confidence approach");
+  });
+
   test("decayAttempts lowers confidence by 0.002 per call, floored at 0", () => {
     const s = createSession("debugging");
     recordAttempt(s.session_id, { approach: "decaying", outcome: "rejected", critique: "c" });
