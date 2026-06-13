@@ -400,6 +400,20 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
     response += continuity;
   }
 
+  // Surface pending improvement suggestions from past sessions as OFFERS (consider; never enforced).
+  let pendingSuggestions: { id: number; suggestion: string }[] = [];
+  try {
+    pendingSuggestions = sessions.loadPendingSuggestions(3).map(s => ({ id: s.id, suggestion: s.suggestion }));
+  } catch (err) {
+    logger.warn("session_start loadPendingSuggestions failed", { error: String(err) });
+  }
+  if (pendingSuggestions.length > 0) {
+    response += `\n\n## Past improvement suggestions (consider; dismiss if not relevant)\n`;
+    for (const s of pendingSuggestions) {
+      response += `- [${s.id}] ${s.suggestion}\n`;
+    }
+  }
+
   return {
     content: [{ type: "text", text: response }],
   };
@@ -472,6 +486,16 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
     distilledPitfalls = distillRepeatedDeadEnds(session);
   } catch (err) {
     logger.warn("session_end distill failed", { error: String(err) });
+  }
+
+  // Persist low-success improvement lines so they can be surfaced as OFFERS at the next
+  // session_start (never enforced). best-effort; never break session_end.
+  for (const line of improvementLines) {
+    try {
+      sessions.saveImprovementSuggestion(session.session_id, line.trim());
+    } catch (err) {
+      logger.warn("session_end saveImprovementSuggestion failed", { error: String(err) });
+    }
   }
 
   sessions.saveSessions(allSessions);

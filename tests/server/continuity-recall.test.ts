@@ -157,3 +157,23 @@ describe("session_end distill-to-pitfalls", () => {
     assert.doesNotMatch(res.content[0].text, /distilled pitfall/i);
   });
 });
+
+describe("session_end persistent improvement suggestions", () => {
+  test("low guide success rate persists an improvement suggestion shown at next session_start", async () => {
+    // Drive a guide's failure count up to trigger the low-success suggestion, across sessions.
+    for (let i = 0; i < 4; i++) {
+      await handleSessionStart({ task_type: "implementation", technologies: ["react"] });
+      await handleGuidePractice({ guide: "react", category: "web-frontend", contexts: ["x"], learnings: ["y"], outcome: "failure" });
+      await handleSessionEnd({ outcome: "failure" });
+    }
+    // A pending suggestion now exists.
+    const { loadPendingSuggestions } = await import("../../src/sessions/index.js");
+    const pending = loadPendingSuggestions();
+    assert.ok(pending.length >= 1);
+    assert.match(pending[0].suggestion, /react/i);
+
+    // The next session_start surfaces it.
+    const start = await handleSessionStart({ task_type: "implementation", technologies: ["react"] });
+    assert.match(start.content[0].text, /react/i);
+  });
+});
