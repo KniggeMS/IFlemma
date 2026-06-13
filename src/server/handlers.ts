@@ -8,6 +8,7 @@ import * as store from "../db/memory-store.js";
 
 import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import * as intel from "../intelligence/index.js";
+import { redactSecrets } from "../memory/privacy.js";
 import type { FragmentType } from "../types.js";
 
 interface ToolResult {
@@ -25,6 +26,14 @@ interface SessionEndArgs {
   outcome?: string;
   final_approach?: string;
   lessons?: string[];
+}
+
+interface SessionAttemptArgs {
+  approach?: string;
+  outcome?: string;
+  critique?: string;
+  rationale?: string;
+  related_memory_id?: string;
 }
 
 interface MemoryReadArgs {
@@ -454,6 +463,71 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   logger.flow("session_end", "complete", { session_id: session.session_id, outcome, improvement_suggestions: improvementLines.length });
   return {
     content: [{ type: "text", text: response }],
+  };
+}
+
+export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<ToolResult> {
+  const approach = args?.approach;
+  const outcome = args?.outcome as "rejected" | "partial" | "promising" | undefined;
+
+  if (!approach || !outcome) {
+    return {
+      content: [{ type: "text", text: "Error: 'approach' and 'outcome' are required for session_attempt." }],
+      isError: true,
+    };
+  }
+
+  if (!["rejected", "partial", "promising"].includes(outcome)) {
+    return {
+      content: [{ type: "text", text: "Error: 'outcome' must be one of: rejected, partial, promising." }],
+      isError: true,
+    };
+  }
+
+  const sessionId = activeSessionId;
+  if (!sessionId) {
+    logger.warn("session_attempt no active session", {});
+    return {
+      content: [{ type: "text", text: "Error: No active session. Call session_start before recording attempts." }],
+      isError: true,
+    };
+  }
+
+  const allSessions = sessions.loadSessions();
+  const session = sessions.findSession(allSessions, sessionId);
+  if (!session) {
+    return {
+      content: [{ type: "text", text: "Error: Active session not found in store." }],
+      isError: true,
+    };
+  }
+
+  // Redact secrets from free-text fields before persisting (reuses memory/privacy.ts —
+  // attempts contain reasoning that may paste in tokens/keys). rationale is short and optional; left as-is.
+  const approachRedacted = redactSecrets(approach).redacted;
+  const critiqueRedacted = args?.critique ? redactSecrets(args.critique).redacted : null;
+
+  const attempt = sessions.recordAttempt(sessionId, {
+    approach: approachRedacted,
+    outcome,
+    critique: critiqueRedacted,
+    rationale: args?.rationale ?? null,
+    related_memory_id: args?.related_memory_id ?? null,
+  });
+
+  // Activate the passive self_critique_count: any attempt with a critique is self-critique.
+  if ((outcome === "rejected" || outcome === "partial") && args?.critique) {
+    session.self_critique_count = (session.self_critique_count ?? 0) + 1;
+  }
+  session.refinement_attempts = (session.refinement_attempts ?? 0) + 1;
+  sessions.saveSessions(allSessions);
+
+  notifyMemoryChange();
+
+  const valueTag = outcome === "rejected" ? "(dead end — most valuable)" : outcome === "partial" ? "(partial)" : "(promising)";
+  logger.flow("session_attempt", "recorded", { session_id: sessionId, seq: attempt?.seq, outcome });
+  return {
+    content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${approach} ${valueTag}.` }],
   };
 }
 
@@ -1900,6 +1974,11 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
       }
       case "session_end": {
         const result = await handleSessionEnd(args as SessionEndArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "session_attempt": {
+        const result = await handleSessionAttempt(args as SessionAttemptArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
