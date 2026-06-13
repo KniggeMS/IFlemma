@@ -137,4 +137,16 @@ describe("Improvement-suggestion persistence", () => {
     assert.equal(row.status, "accepted");
     assert.ok(row.resolved_at);
   });
+
+  test("updateSuggestionStatus re-offer clears resolved_at (idempotent)", () => {
+    const s = createSession("debugging");
+    const id = saveImprovementSuggestion(s.session_id, "tip three");
+    updateSuggestionStatus(id, "accepted" as SuggestionStatus);
+    // Move back to offered → resolved_at must be cleared and it re-enters pending.
+    updateSuggestionStatus(id, "offered" as SuggestionStatus);
+    const row = getDb().prepareCached("SELECT status, resolved_at FROM improvement_suggestions WHERE id = ?").get(id) as { status: string; resolved_at: string | null };
+    assert.equal(row.status, "offered");
+    assert.equal(row.resolved_at, null);
+    assert.equal(loadPendingSuggestions().length, 1);
+  });
 });

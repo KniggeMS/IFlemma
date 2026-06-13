@@ -453,7 +453,7 @@ export function saveImprovementSuggestion(sessionId: string, suggestion: string)
 export function loadPendingSuggestions(limit = 3): ImprovementSuggestion[] {
   const db = getDb();
   const rows = db
-    .prepareCached("SELECT * FROM improvement_suggestions WHERE status = 'offered' ORDER BY created_at DESC LIMIT ?")
+    .prepareCached("SELECT * FROM improvement_suggestions WHERE status = 'offered' ORDER BY created_at DESC, id DESC LIMIT ?")
     .all(limit) as Record<string, unknown>[];
   return rows.map(rowToSuggestion);
 }
