@@ -177,3 +177,19 @@ describe("session_end persistent improvement suggestions", () => {
     assert.match(start.content[0].text, /react/i);
   });
 });
+
+describe("attempt decay on session_start", () => {
+  test("starting a new session decays prior attempt confidence by 0.002", async () => {
+    await handleSessionStart({ task_type: "debugging" });
+    await handleSessionAttempt({ approach: "will-decay", outcome: "rejected", critique: "c" });
+    await handleSessionEnd({ outcome: "success" });
+
+    const before = getDb().prepareCached("SELECT confidence FROM session_attempts WHERE approach='will-decay'").get() as { confidence: number };
+    // Use a DIFFERENT task_type so the new session_start does NOT recall "will-decay" (which would
+    // apply Task 7's +0.015 boost and mask the decay). This isolates decay for a clean measurement.
+    await handleSessionStart({ task_type: "refactoring" });
+    const after = getDb().prepareCached("SELECT confidence FROM session_attempts WHERE approach='will-decay'").get() as { confidence: number };
+    assert.ok(after.confidence < before.confidence, "confidence should decay on a new session_start");
+    assert.ok(before.confidence - after.confidence <= 0.0021);
+  });
+});

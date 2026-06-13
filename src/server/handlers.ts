@@ -354,6 +354,11 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   }
 
   const session = sessions.createSession(taskType, technologies);
+  try {
+    sessions.decayAttempts();
+  } catch (err) {
+    logger.warn("session_start decayAttempts failed", { error: String(err) });
+  }
   session.initial_approach = initialApproach;
   activeSessionId = session.session_id;
   allSessions.push(session);
