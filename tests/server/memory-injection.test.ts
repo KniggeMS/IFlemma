@@ -7,7 +7,7 @@ import os from "os";
 import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as core_config from "../../src/memory/config.js";
-import { buildInstructions, buildInjectedTools } from "../../src/server/system-prompt.js";
+import { buildInstructions, buildInjectedTools, BASE_SYSTEM_PROMPT } from "../../src/server/system-prompt.js";
 import { TOOLS } from "../../src/server/tools.js";
 import type { MemoryFragment } from "../../src/types.js";
 
@@ -277,5 +277,16 @@ describe("buildInjectedTools", () => {
     const staticAudit = TOOLS.find(t => t.name === "memory_audit");
     assert.ok(staticAudit);
     assert.strictEqual(audit.description, staticAudit.description);
+  });
+});
+
+describe("BASE_SYSTEM_PROMPT", () => {
+  test("is self-contained — no AGENTS.md reference", () => {
+    assert.ok(!BASE_SYSTEM_PROMPT.includes("AGENTS.md"));
+  });
+
+  test("tells the LLM how to use memory", () => {
+    assert.ok(BASE_SYSTEM_PROMPT.includes("memory_read"));
+    assert.ok(BASE_SYSTEM_PROMPT.includes("memory_add"));
   });
 });

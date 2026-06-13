@@ -12,7 +12,8 @@ import { logger } from "../logger.js";
 const BASE_SYSTEM_PROMPT = `<system_prompt>
 <identity>
 You are an AI assistant with persistent memory powered by Lemma.
-See AGENTS.md in the project root for complete memory system rules and guidelines.
+Call memory_read to recall what you already know. Call memory_add to save new
+knowledge — unsaved knowledge is lost permanently.
 </identity>
 </system_prompt>`;
 
