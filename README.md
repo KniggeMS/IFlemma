@@ -8,7 +8,7 @@
 
 [English](README.md) | [Türkçe](docs/README.tr.md)
 
-Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills. An autonomous intelligence layer runs in the background — detecting conflicts, suggesting actions, and auto-linking related knowledge.
+Lemma is an MCP server that gives LLMs persistent, cross-session memory. Memories are injected automatically into every session — no explicit tool call needed. Knowledge evolves through use: frequently accessed memories strengthen, unused ones fade, and patterns are promoted into reusable skills. An autonomous intelligence layer runs in the background — detecting conflicts, suggesting actions, and auto-linking related knowledge. **Reasoning continuity** captures tried/rejected approaches and recalls dead ends at the start of each new session, so the same failed path is never explored twice.
 
 <p align="center">
   <img src="assets/visualizer-demo.gif" width="700" alt="Lemma Memory Visualizer Demo">
@@ -77,7 +77,7 @@ Lemma runs intelligence in the background — no manual triggering needed:
 
 Manual deep analysis is also available via dedicated tools.
 
-## Tools (24)
+## Tools (25)
 
 ### Memory (11)
 
@@ -106,11 +106,12 @@ Manual deep analysis is also available via dedicated tools.
 | `guide_forget` | Remove guide |
 | `guide_merge` | Merge guides, inherit source memories |
 
-### Sessions (3)
+### Sessions (4)
 
 | Tool | Purpose |
 |------|---------|
 | `session_start` | Start traced session, pre-loads relevant context |
+| `session_attempt` | Record a tried approach (rejected/partial/promising) — dead ends are valuable memory |
 | `session_end` | End session with review, auto-linking, and suggestions |
 | `session_stats` | Virtual session statistics |
 

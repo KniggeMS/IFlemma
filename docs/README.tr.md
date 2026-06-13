@@ -6,7 +6,7 @@
 
 [English](../README.md) | [Türkçe](README.tr.md)
 
-Lemma, LLM'lere oturumlar arası kalıcı bellek sağlayan bir MCP sunucusudur. Bellekler her oturuma otomatik enjekte edilir — araç çağrısına gerek yoktur. Bilgi kullanım yoluyla evrilir: sık erişilenler güçlenir, kullanılmayanlar solar, örüntüler yeniden kullanılabilir yeteneklere dönüştürülür. Arka planda otonom bir zeka katmanı çalışır — çelişkileri tespit eder, eylem önerileri sunar ve ilgili bilgileri otomatik bağlar.
+Lemma, LLM'lere oturumlar arası kalıcı bellek sağlayan bir MCP sunucusudur. Bellekler her oturuma otomatik enjekte edilir — araç çağrısına gerek yoktur. Bilgi kullanım yoluyla evrilir: sık erişilenler güçlenir, kullanılmayanlar solar, örüntüler yeniden kullanılabilir yeteklere dönüştürülür. Arka planda otonom bir zeka katmanı çalışır — çelişkileri tespit eder, eylem önerileri sunar ve ilgili bilgileri otomatik bağlar. **Mantık sürekliliği** denenen/reddedilen yaklaşımları kaydeder ve her yeni oturumun başında çıkmaz sokakları (dead-end) hatırlatır, böylece aynı başarısız yol iki kez denenmez.
 
 ## Hızlı Başlangıç
 
@@ -65,7 +65,7 @@ Lemma arka planda zeka çalıştırır — manuel tetiklemeye gerek yoktur:
 
 Manuel derin analiz de özel araçlarla kullanılabilir.
 
-## Araçlar (24)
+## Araçlar (25)
 
 ### Bellek (11)
 
@@ -94,11 +94,12 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `guide_forget` | Rehber sil |
 | `guide_merge` | Rehberleri birleştir, kaynak bellekleri aktar |
 
-### Oturumlar (3)
+### Oturumlar (4)
 
 | Araç | Açıklama |
 |------|----------|
 | `session_start` | İzlenen oturum başlat, ilgili bağlamı önceden yükle |
+| `session_attempt` | Denenen bir yaklaşımı kaydet (reddedilen/kısmi/umut verici) — çıkmaz sokaklar değerli bellektir |
 | `session_end` | İnceleme, otomatik bağlama ve önerilerle oturumu sonlandır |
 | `session_stats` | Sanal oturum istatistikleri |
 
