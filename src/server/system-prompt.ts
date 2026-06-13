@@ -6,7 +6,7 @@ import { applyPromptModifiers } from "./hooks.js";
 import * as core_config from "../memory/config.js";
 import { scanForSecrets } from "../memory/privacy.js";
 import { TOOLS } from "./tools.js";
-import { INSTRUCTIONS_TEMPLATE } from "./prompt-content.js";
+import { INSTRUCTIONS_TEMPLATE, TOOL_NUDGES } from "./prompt-content.js";
 import { logger } from "../logger.js";
 
 const BASE_SYSTEM_PROMPT = `<system_prompt>
@@ -327,15 +327,19 @@ export async function buildInjectedTools(projectName: string | null): Promise<To
 
   injection += `---\nCall memory_read to search your memories. Call memory_add to save new knowledge.\n`;
 
-  const clonedTools: ToolDefinition[] = TOOLS.map(tool => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: {
-      type: tool.inputSchema.type,
-      properties: { ...tool.inputSchema.properties },
-      required: tool.inputSchema.required ? [...tool.inputSchema.required] : undefined,
-    },
-  }));
+  const clonedTools: ToolDefinition[] = TOOLS.map(tool => {
+    const nudge = TOOL_NUDGES[tool.name];
+    const baseDescription = nudge ? `${tool.description}\n${nudge}` : tool.description;
+    return {
+      name: tool.name,
+      description: baseDescription,
+      inputSchema: {
+        type: tool.inputSchema.type,
+        properties: { ...tool.inputSchema.properties },
+        required: tool.inputSchema.required ? [...tool.inputSchema.required] : undefined,
+      },
+    };
+  });
 
   const memoryReadIdx = clonedTools.findIndex(t => t.name === "memory_read");
   if (memoryReadIdx >= 0) {

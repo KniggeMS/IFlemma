@@ -8,6 +8,7 @@ import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as core_config from "../../src/memory/config.js";
 import { buildInstructions, buildInjectedTools } from "../../src/server/system-prompt.js";
+import { TOOLS } from "../../src/server/tools.js";
 import type { MemoryFragment } from "../../src/types.js";
 
 let TMPDIR: string;
@@ -153,7 +154,7 @@ describe("buildInjectedTools", () => {
     assert.ok(memRead.description.includes("PERSISTENT MEMORY"));
   });
 
-  test("other tools are not modified", async () => {
+  test("non-memory_read tools do not receive memory content", async () => {
     const result = await buildInjectedTools(null);
     const memAdd = result.find(t => t.name === "memory_add");
     assert.ok(memAdd);
@@ -247,5 +248,34 @@ describe("buildInjectedTools", () => {
     assert.ok(names.includes("session_start"));
     assert.ok(names.includes("session_end"));
     assert.ok(names.includes("session_stats"));
+  });
+
+  test("nudges are appended to relevant tools", async () => {
+    const result = await buildInjectedTools(null);
+    const memAdd = result.find(t => t.name === "memory_add");
+    assert.ok(memAdd);
+    assert.ok(memAdd.description.includes("Save new knowledge IMMEDIATELY"), "memory_add should carry its nudge");
+    const sessStart = result.find(t => t.name === "session_start");
+    assert.ok(sessStart);
+    assert.ok(sessStart.description.includes("FIRST when starting a task"), "session_start should carry its nudge");
+  });
+
+  test("memory_read keeps both nudge and memory content", async () => {
+    const frags = [core.createFragment("content xyz marker", "ai", "Xyz Marker", "p")];
+    core.saveMemory(frags);
+    const result = await buildInjectedTools("p");
+    const memRead = result.find(t => t.name === "memory_read");
+    assert.ok(memRead);
+    assert.ok(memRead.description.includes("ALWAYS read before acting"), "memory_read should carry its nudge");
+    assert.ok(memRead.description.includes("PERSISTENT MEMORY"), "memory_read should still carry memory content");
+  });
+
+  test("non-nudged tools keep their static description unchanged", async () => {
+    const result = await buildInjectedTools(null);
+    const audit = result.find(t => t.name === "memory_audit");
+    assert.ok(audit);
+    const staticAudit = TOOLS.find(t => t.name === "memory_audit");
+    assert.ok(staticAudit);
+    assert.strictEqual(audit.description, staticAudit.description);
   });
 });
