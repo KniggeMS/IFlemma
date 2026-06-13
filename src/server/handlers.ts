@@ -9,6 +9,7 @@ import * as store from "../db/memory-store.js";
 import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
+import { loadConfig, estimateTokens } from "../memory/config.js";
 import type { FragmentType, AttemptOutcome } from "../types.js";
 
 interface ToolResult {
@@ -253,6 +254,32 @@ function notifyMemoryChange(): void {
   }
 }
 
+function buildContinuityRecall(taskType: string): string {
+  const recent = sessions.loadRecentAttempts({ task_type: taskType, limit: 15, minConfidence: 0.2 });
+  if (recent.length === 0) return "";
+
+  const budget = loadConfig().token_budget.continuity;
+  const header = `\n\n## Prior reasoning on similar ${taskType} tasks`;
+  let used = estimateTokens(header);
+
+  let block = header + "\n### Dead ends (don't repeat)";
+  const deadEnds = recent.filter(a => a.outcome === "rejected" || a.outcome === "partial");
+  for (const a of deadEnds) {
+    const line = `\n- Tried: ${a.approach}. Rejected because: ${a.critique ?? "unknown"}`;
+    if (used + estimateTokens(line) > budget) break; // rejected attempts never get truncated mid-item; stop adding
+    block += line;
+    used += estimateTokens(line);
+  }
+
+  // Boost recalled attempts (they are relevant again) — learn from recall.
+  // Attempt.session_id is populated by rowToAttempt (Task 3) and the SELECT includes sa.*.
+  for (const a of deadEnds) {
+    try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { /* best-effort */ }
+  }
+
+  return block;
+}
+
 export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolResult> {
   const taskType = args?.task_type;
   const technologies = args?.technologies || [];
@@ -318,6 +345,12 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   response += `\n${formattedSuggestions}`;
 
   logger.flow("session_start", "complete", { session_id: session.session_id, task_type: taskType, suggestions: suggestions.relevant.length + suggestions.suggested.length, preloaded: relevantResults.length });
+
+  const continuity = buildContinuityRecall(taskType);
+  if (continuity) {
+    response += continuity;
+  }
+
   return {
     content: [{ type: "text", text: response }],
   };
