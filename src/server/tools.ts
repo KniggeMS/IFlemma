@@ -67,6 +67,37 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "session_attempt",
+    description: "Record a reasoning attempt during the current task — what you tried, why, and the outcome. Captures the reasoning journey (tried/rejected hypotheses) so future sessions don't repeat dead ends. Call whenever an approach is abandoned or only partially tried. Outcome 'rejected' is the MOST valuable (it prevents repeating a dead end).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approach: {
+          type: "string",
+          description: "The approach or hypothesis you tried.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["rejected", "partial", "promising"],
+          description: "'rejected' = abandoned (most valuable — dead end). 'partial' = tried but incomplete. 'promising' = looks good but unproven.",
+        },
+        critique: {
+          type: "string",
+          description: "Why it failed or was abandoned (for rejected/partial). This is your self-critique and becomes the dead-end warning.",
+        },
+        rationale: {
+          type: "string",
+          description: "Why you tried it in the first place. Optional.",
+        },
+        related_memory_id: {
+          type: "string",
+          description: "A memory fragment ID this attempt built on or contradicts. Optional.",
+        },
+      },
+      required: ["approach", "outcome"],
+    },
+  },
+  {
     name: "memory_read",
     description: "Read memory fragments. SUMMARY MODE: Shows title + description only (not full content). Use id parameter to get full detail of a specific fragment. Use all=true to see fragments from all projects.",
     inputSchema: {

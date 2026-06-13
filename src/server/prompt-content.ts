@@ -46,6 +46,7 @@ export const TOOL_NUDGES: Record<string, string> = {
   memory_update: "When reality contradicts a memory, trust reality and update it here.",
   memory_feedback: "Give 👍 after a useful memory to boost its ranking.",
   session_end: "Call when done — record outcome (success/partial/failure) + lessons.",
+  session_attempt: "⚠️ Record abandoned/partial approaches — dead ends are the MOST valuable memory (prevents repeating them).",
   guide_distill: "Promote a proven pattern/lesson into a reusable guide.",
   guide_practice: "⚠️ Always record each guide use + outcome here — it trains the guide.",
   memory_library: "User -lib -> full knowledge-base snapshot + maintenance signals.",

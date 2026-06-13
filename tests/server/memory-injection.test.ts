@@ -124,7 +124,7 @@ describe("buildInjectedTools", () => {
   test("returns array of tools with same count as original", async () => {
     const result = await buildInjectedTools(null);
     assert.ok(Array.isArray(result));
-    assert.ok(result.length >= 19);
+    assert.strictEqual(result.length, 25, `Expected 25 tools, got ${result.length}`);
     const names = result.map(t => t.name);
     assert.ok(names.includes("memory_read"));
     assert.ok(names.includes("memory_add"));
@@ -258,6 +258,16 @@ describe("buildInjectedTools", () => {
     const sessStart = result.find(t => t.name === "session_start");
     assert.ok(sessStart);
     assert.ok(sessStart.description.includes("FIRST when starting a task"), "session_start should carry its nudge");
+  });
+
+  test("session_attempt carries its dead-end nudge", async () => {
+    const result = await buildInjectedTools(null);
+    const attempt = result.find(t => t.name === "session_attempt");
+    assert.ok(attempt, "session_attempt tool must exist");
+    assert.ok(
+      attempt.description.includes("dead ends are the MOST valuable memory"),
+      "session_attempt should carry its dead-end nudge",
+    );
   });
 
   test("memory_read keeps both nudge and memory content", async () => {
