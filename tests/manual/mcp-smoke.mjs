@@ -85,6 +85,9 @@ try {
   check("memory_read still carries memory content", memRead?.description.includes("PERSISTENT MEMORY") || memRead?.description.includes("No memories yet"));
   check("memory_add carries its nudge", memAdd?.description.includes("Save new knowledge IMMEDIATELY"));
   check("session_start carries its nudge", sessStart?.description.includes("FIRST when starting a task"));
+  const sessAttempt = tools.find((t) => t.name === "session_attempt");
+  check("session_attempt tool exists", !!sessAttempt);
+  check("session_attempt carries its nudge", sessAttempt?.description.includes("dead ends"));
   const offenders = tools.filter((t) => t.description?.includes("AGENTS.md")).map((t) => t.name);
   check("NO tool description mentions AGENTS.md", offenders.length === 0, `offending: ${offenders.join(", ")}`);
 
@@ -94,6 +97,18 @@ try {
   check("AGENTS.md still exists (real user content remains)", after !== null && after.length > 0);
   check("AGENTS.md: stale Lemma block removed", !!after && !after.includes("lemma:start") && !after.includes("OLD INJECTED CONTENT"));
   check("AGENTS.md: user content preserved", !!after && after.includes("My Project Rules") && after.includes("Be nice"));
+
+  // --- 4. Continuity flow over the real server ---
+  async function call(toolName, args) {
+    return client.callTool({ name: toolName, arguments: args });
+  }
+  await call("session_start", { task_type: "debugging", technologies: ["react"] });
+  await call("session_attempt", { approach: "useState derived cache", outcome: "rejected", critique: "re-render loop" });
+  await call("session_end", { outcome: "success", final_approach: "useMemo" });
+  const secondStart = await call("session_start", { task_type: "debugging", technologies: ["react"] });
+  const recallText = (secondStart.content?.[0]?.text) || "";
+  check("continuity recall surfaces prior dead end", recallText.includes("useState derived cache"));
+  check("continuity recall has Dead ends heading", recallText.includes("Dead ends"));
 
   console.log(`\ninstructions: ${instructions?.length ?? 0} chars (~${Math.ceil((instructions?.length ?? 0) / 3.5)} tokens)  |  tools: ${tools.length}`);
 } catch (e) {
