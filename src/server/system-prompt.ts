@@ -205,7 +205,7 @@ export function buildInstructions(projectName: string | null): string {
     }
     result = instructions + index;
   } else {
-    logger.warn("buildInstructions", "token budget smaller than template; returning template only", { maxTokens });
+    logger.warn("buildInstructions: token budget smaller than template; returning template only", { maxTokens });
   }
 
   logger.flow("buildInstructions", "complete", {

@@ -315,12 +315,12 @@ async function initializeContext(): Promise<void> {
     const projectDir = process.cwd();
     if (projectDir) {
       try {
-        const result = agentsMd.injectAgentsMd(projectDir);
-        if (result.injected) {
-          logger.info(`AGENTS.md ${result.created ? "created" : "injected"}: ${result.path}`);
+        const removed = agentsMd.removeAgentsMd(projectDir);
+        if (removed) {
+          logger.info("AGENTS.md: removed stale Lemma block (migration to MCP instructions)");
         }
       } catch (e) {
-        logger.warn("Failed to inject AGENTS.md", (e as Error).message);
+        logger.warn("Failed to clean AGENTS.md", (e as Error).message);
       }
     }
   } else {
