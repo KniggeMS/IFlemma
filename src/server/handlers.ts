@@ -303,6 +303,7 @@ function distillRepeatedDeadEnds(session: Session): string[] {
   if (pastRows.length === 0) return distilled;
 
   const pastTexts = pastRows.map(r => `${r.approach} ${r.critique ?? ""}`);
+  const guideDb = getDb();
   for (const cur of currentAttempts) {
     const candidate = { id: cur.session_id + ":" + cur.seq, text: `${cur.approach} ${cur.critique ?? ""}` };
     // Reuse the existing TF-IDF similarity: build vectors over [candidate + past], find pairs >= 0.5.
@@ -322,7 +323,6 @@ function distillRepeatedDeadEnds(session: Session): string[] {
     if (!guide) continue;
     const pitfall = `Approach "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
     guide.known_pitfalls = Array.from(new Set([...(guide.known_pitfalls ?? []), pitfall]));
-    const guideDb = getDb();
     guides.upsertGuideToDb(guideDb, guide);
     distilled.push(pitfall);
   }
