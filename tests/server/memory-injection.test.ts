@@ -31,7 +31,8 @@ describe("buildInstructions", () => {
     const result = buildInstructions(null);
     assert.ok(typeof result === "string");
     assert.ok(result.length > 0);
-    assert.ok(result.includes("AGENTS.md"));
+    assert.ok(!result.includes("AGENTS.md"));
+    assert.ok(result.includes("memory_add"));
   });
 
   test("includes project name when provided", () => {
@@ -81,8 +82,19 @@ describe("buildInstructions", () => {
 
     core_config.resetConfig();
     const result = buildInstructions("testproj");
+    const cfg = core_config.loadConfig();
     const tokens = core_config.estimateTokens(result);
-    assert.ok(tokens <= 600, `Expected <= 600 tokens, got ${tokens}`);
+    assert.ok(tokens <= cfg.token_budget.instructions, `Expected <= ${cfg.token_budget.instructions} tokens, got ${tokens}`);
+  });
+
+  test("static template survives even under a tiny budget", () => {
+    fs.writeFileSync(path.join(TMPDIR, "config.json"), JSON.stringify({ token_budget: { instructions: 50 } }));
+    core_config.setConfigDir(TMPDIR);
+    core_config.resetConfig();
+    const result = buildInstructions(null);
+    assert.ok(result.includes("Persistent Memory"), "Static template must survive budget pressure");
+    core_config.setConfigDir(path.join(os.homedir(), ".lemma"));
+    core_config.resetConfig();
   });
 
   test("includes tool references when memory exists", () => {
@@ -98,9 +110,12 @@ describe("buildInstructions", () => {
     assert.ok(result.includes("no saved memories") || result.includes("No memories"));
   });
 
-  test("references AGENTS.md for rules", () => {
+  test("contains behavioral rules, not an AGENTS.md pointer", () => {
     const result = buildInstructions(null);
-    assert.ok(result.includes("AGENTS.md"));
+    assert.ok(!result.includes("AGENTS.md"));
+    assert.ok(result.includes("memory_read"));
+    assert.ok(result.includes("memory_add"));
+    assert.ok(result.includes("ENGLISH"));
   });
 });
 

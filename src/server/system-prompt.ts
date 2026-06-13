@@ -6,6 +6,7 @@ import { applyPromptModifiers } from "./hooks.js";
 import * as core_config from "../memory/config.js";
 import { scanForSecrets } from "../memory/privacy.js";
 import { TOOLS } from "./tools.js";
+import { INSTRUCTIONS_TEMPLATE } from "./prompt-content.js";
 import { logger } from "../logger.js";
 
 const BASE_SYSTEM_PROMPT = `<system_prompt>
@@ -146,6 +147,10 @@ export function buildInstructions(projectName: string | null): string {
   const cfg = core_config.loadConfig();
   const maxTokens = cfg.token_budget.instructions;
 
+  // Static teaching template — always returned in full (never truncated).
+  const instructions = INSTRUCTIONS_TEMPLATE;
+  const headroom = maxTokens - core_config.estimateTokens(instructions);
+
   let memory: MemoryFragment[] = [];
   try {
     memory = core.loadMemory();
@@ -159,46 +164,47 @@ export function buildInstructions(projectName: string | null): string {
     : [];
   const totalGuides = guides.loadGuides().length;
 
-  let instructions = `You have persistent memory powered by Lemma. Full rules in AGENTS.md.\n\nIMPORTANT: Call memory_read before starting any task. Save new knowledge with memory_add.\n\n`;
+  // Dynamic memory index — appended, trimmed ONLY within headroom.
+  let index = "\n\n## Your current memory\n";
 
   if (globalFragments.length > 0 || projectFragments.length > 0) {
-    instructions += `YOUR CURRENT MEMORY:\n`;
-
     if (projectFragments.length > 0) {
       const top = [...projectFragments]
         .sort((a, b) => b.confidence - a.confidence)
         .slice(0, 8);
-      instructions += `- Project "${projectName}": ${projectFragments.length} fragments\n`;
+      index += `- Project "${projectName}": ${projectFragments.length} fragments\n`;
       for (const f of top) {
-        instructions += `  [${f.id}] ${f.title} (${f.confidence.toFixed(2)})\n`;
+        index += `  [${f.id}] ${f.title} (${f.confidence.toFixed(2)})\n`;
       }
     }
-
     if (globalFragments.length > 0) {
       const top = [...globalFragments]
         .sort((a, b) => b.confidence - a.confidence)
         .slice(0, 5);
-      instructions += `- Global: ${globalFragments.length} fragments\n`;
+      index += `- Global: ${globalFragments.length} fragments\n`;
       for (const f of top) {
-        instructions += `  [${f.id}] ${f.title} (${f.confidence.toFixed(2)})\n`;
+        index += `  [${f.id}] ${f.title} (${f.confidence.toFixed(2)})\n`;
       }
     }
-
-    instructions += `\nUse memory_read to load full details of any fragment.\n`;
+    index += `\nUse memory_read to load full details of any fragment.\n`;
   } else {
-    instructions += `You have no saved memories yet. Start building your knowledge base by calling memory_add when you learn something.\n`;
+    index += `You have no saved memories yet. Call memory_add to start building your knowledge base.\n`;
   }
 
   if (totalGuides > 0) {
-    instructions += `\nYou have ${totalGuides} skill guide(s). Use guide_get to review them.\n`;
+    index += `\nYou have ${totalGuides} skill guide(s). Use guide_get to review them.\n`;
   }
 
-  const tokens = core_config.estimateTokens(instructions);
-  if (tokens > maxTokens) {
-    logger.warn("buildInstructions token budget exceeded", { tokens, maxTokens });
-    const ratio = maxTokens / tokens;
-    const cutChar = Math.floor(instructions.length * ratio);
-    instructions = instructions.substring(0, cutChar);
+  let result = instructions;
+  if (headroom > 0) {
+    const indexTokens = core_config.estimateTokens(index);
+    if (indexTokens > headroom) {
+      const ratio = headroom / indexTokens;
+      index = index.substring(0, Math.floor(index.length * ratio));
+    }
+    result = instructions + index;
+  } else {
+    logger.warn("buildInstructions", "token budget smaller than template; returning template only", { maxTokens });
   }
 
   logger.flow("buildInstructions", "complete", {
@@ -206,10 +212,10 @@ export function buildInstructions(projectName: string | null): string {
     globalCount: globalFragments.length,
     projectCount: projectFragments.length,
     guideCount: totalGuides,
-    tokens: core_config.estimateTokens(instructions),
+    tokens: core_config.estimateTokens(result),
   });
 
-  return instructions;
+  return result;
 }
 
 export async function buildInjectedTools(projectName: string | null): Promise<ToolDefinition[]> {
