@@ -4,9 +4,10 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-import { handleSessionStart, handleSessionEnd, handleSessionAttempt, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
+import { handleSessionStart, handleSessionEnd, handleSessionAttempt, handleGuidePractice, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
 import { setSessionsDir } from "../../src/sessions/index.js";
 import { loadConfig } from "../../src/memory/config.js";
+import { getDb } from "../../src/db/database.js";
 
 let TMPDIR: string;
 
@@ -119,5 +120,40 @@ describe("session_start continuity recall", () => {
     // caps recall, so the continuity block truncates rather than dumping the whole blob.
     assert.doesNotMatch(text, /x{4000}/, "the oversized approach must be truncated out of recall");
     assert.ok(budget > 0);
+  });
+});
+
+describe("session_end distill-to-pitfalls", () => {
+  test("a repeated dead-end across sessions is distilled into the guide's pitfalls", async () => {
+    // Two sessions, same guide/tech, same dead end described similarly.
+    await handleSessionStart({ task_type: "debugging", technologies: ["react"] });
+    await handleGuidePractice({ guide: "react", category: "web-frontend", contexts: ["hooks"], learnings: ["render"] });
+    await handleSessionAttempt({ approach: "useState to cache the derived calculation result", outcome: "rejected", critique: "re-render loop because setState in render body" });
+    await handleSessionEnd({ outcome: "failure" });
+
+    await handleSessionStart({ task_type: "debugging", technologies: ["react"] });
+    await handleGuidePractice({ guide: "react", category: "web-frontend", contexts: ["hooks"], learnings: ["state"] });
+    await handleSessionAttempt({ approach: "Use useState to cache derived calculation", outcome: "rejected", critique: "re-render loop setState render" });
+    const res = await handleSessionEnd({ outcome: "failure" });
+
+    // The react guide now carries a distilled pitfall.
+    const row = getDb().prepareCached("SELECT pitfalls FROM guides WHERE guide = 'react' COLLATE NOCASE").get() as { pitfalls: string | null };
+    const pitfalls = row.pitfalls ? JSON.parse(row.pitfalls) as string[] : [];
+    assert.ok(pitfalls.some(p => /usestate/i.test(p) && /render/i.test(p)), `expected a useState/render pitfall, got: ${JSON.stringify(pitfalls)}`);
+    // session_end should mention the distillation.
+    assert.match(res.content[0].text, /distill/i);
+  });
+
+  test("a one-off dead-end (no prior match) is NOT distilled (no false positives)", async () => {
+    await handleSessionStart({ task_type: "debugging", technologies: ["python"] });
+    await handleGuidePractice({ guide: "python", category: "programming-language", contexts: ["async"], learnings: ["x"] });
+    await handleSessionAttempt({ approach: "totally novel one-off approach zzz", outcome: "rejected", critique: "unrelated unique failure" });
+    const res = await handleSessionEnd({ outcome: "failure" });
+
+    const row = getDb().prepareCached("SELECT pitfalls FROM guides WHERE guide = 'python' COLLATE NOCASE").get() as { pitfalls: string | null };
+    const pitfalls = row.pitfalls ? JSON.parse(row.pitfalls) as string[] : [];
+    assert.ok(!pitfalls.some(p => /one-off approach zzz/i.test(p)));
+    // Should not claim a distillation.
+    assert.doesNotMatch(res.content[0].text, /distilled pitfall/i);
   });
 });

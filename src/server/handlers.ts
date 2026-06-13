@@ -10,7 +10,7 @@ import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-sto
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
 import { loadConfig, estimateTokens } from "../memory/config.js";
-import type { FragmentType, AttemptOutcome } from "../types.js";
+import type { FragmentType, AttemptOutcome, Session } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -283,6 +283,52 @@ function buildContinuityRecall(taskType: string): string {
   return block;
 }
 
+// Distills REPEATED dead-ends (rejected/partial attempts that recur across sessions
+// with the same task_type) into the most-recently-practiced guide's known_pitfalls list.
+// Uses the existing TF-IDF engine (findSemanticSimilarPairs @ >= 0.5) so a one-off
+// dead-end with no prior match is never distilled (no false positives). Returns the
+// list of pitfall strings actually distilled this call.
+function distillRepeatedDeadEnds(session: Session): string[] {
+  const distilled: string[] = [];
+  const currentAttempts = sessions.loadAttemptsForSession(session.session_id).filter(a => a.outcome === "rejected" || a.outcome === "partial");
+  if (currentAttempts.length === 0) return distilled;
+
+  // Gather past rejected/partial attempts from OTHER sessions with the same task_type.
+  const pastRows = getDb().prepareCached(
+    `SELECT sa.approach, sa.critique FROM session_attempts sa
+     JOIN sessions s ON s.id = sa.session_id
+     WHERE s.id != ? AND s.task_type = ? AND sa.outcome IN ('rejected','partial')`
+  ).all(session.session_id, session.task_type) as { approach: string; critique: string | null }[];
+
+  if (pastRows.length === 0) return distilled;
+
+  const pastTexts = pastRows.map(r => `${r.approach} ${r.critique ?? ""}`);
+  for (const cur of currentAttempts) {
+    const candidate = { id: cur.session_id + ":" + cur.seq, text: `${cur.approach} ${cur.critique ?? ""}` };
+    // Reuse the existing TF-IDF similarity: build vectors over [candidate + past], find pairs >= 0.5.
+    const corpus = [
+      { id: candidate.id, title: "", fragment: candidate.text, description: "" },
+      ...pastTexts.map((t, i) => ({ id: `past${i}`, title: "", fragment: t, description: "" })),
+    ];
+    const vectors = intel.buildVectors(corpus as any);
+    const pairs = intel.findSemanticSimilarPairs(vectors, 0.5, 5);
+    const matched = pairs.some(p => p.id_a === candidate.id || p.id_b === candidate.id);
+    if (!matched) continue;
+
+    // Distill into the most recently practiced guide for this session, if any.
+    const guideName = session.guides_used?.[session.guides_used.length - 1];
+    if (!guideName) continue;
+    const guide = guides.getGuideFromDb(guideName);
+    if (!guide) continue;
+    const pitfall = `Approach "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
+    guide.known_pitfalls = Array.from(new Set([...(guide.known_pitfalls ?? []), pitfall]));
+    const guideDb = getDb();
+    guides.upsertGuideToDb(guideDb, guide);
+    distilled.push(pitfall);
+  }
+  return distilled;
+}
+
 export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolResult> {
   const taskType = args?.task_type;
   const technologies = args?.technologies || [];
@@ -419,6 +465,15 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   }
 
   logger.data("sessions", "save", { session_id: session.session_id, outcome });
+
+  // Distill repeated dead-ends into guide pitfalls (best-effort; never break session_end).
+  let distilledPitfalls: string[] = [];
+  try {
+    distilledPitfalls = distillRepeatedDeadEnds(session);
+  } catch (err) {
+    logger.warn("session_end distill failed", { error: String(err) });
+  }
+
   sessions.saveSessions(allSessions);
   activeSessionId = null;
 
@@ -429,6 +484,9 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   }
   if (improvementLines.length > 0) {
     response += `\nIMPROVEMENT SUGGESTIONS:\n${improvementLines.join("\n")}\n`;
+  }
+  if (distilledPitfalls.length > 0) {
+    response += `\nDistilled ${distilledPitfalls.length} repeated dead-end(s) into guide pitfalls.\n`;
   }
 
   const sCtx = getSessionContext();
