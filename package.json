@@ -31,7 +31,8 @@
     "test:memory": "node --import tsx --import ./tests/_setup.ts --test tests/memory/*.test.ts",
     "test:guides": "node --import tsx --import ./tests/_setup.ts --test tests/guides/*.test.ts",
     "test:sessions": "node --import tsx --import ./tests/_setup.ts --test tests/sessions/*.test.ts",
-    "test:server": "node --import tsx --import ./tests/_setup.ts --test tests/server/*.test.ts"
+    "test:server": "node --import tsx --import ./tests/_setup.ts --test tests/server/*.test.ts",
+    "test:mcp": "node tests/manual/mcp-smoke.mjs"
   },
   "keywords": [
     "mcp",
