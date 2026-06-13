@@ -42,6 +42,13 @@ describe("handleSessionAttempt", () => {
     assert.match(res.content[0].text, /no active session/i);
   });
 
+  test("rejects an invalid outcome with a helpful error (before touching the session)", async () => {
+    await handleSessionStart({ task_type: "debugging" });
+    const res = await handleSessionAttempt({ approach: "bad outcome", outcome: "completed" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /must be one of/i);
+  });
+
   test("redacts secrets pasted into approach/critique before persisting", async () => {
     const { getDb } = await import("../../src/db/database.js");
     await handleSessionStart({ task_type: "debugging" });

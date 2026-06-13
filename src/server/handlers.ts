@@ -9,7 +9,7 @@ import * as store from "../db/memory-store.js";
 import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
-import type { FragmentType } from "../types.js";
+import type { FragmentType, AttemptOutcome } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -468,7 +468,7 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
 
 export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<ToolResult> {
   const approach = args?.approach;
-  const outcome = args?.outcome as "rejected" | "partial" | "promising" | undefined;
+  const outcome = args?.outcome;
 
   if (!approach || !outcome) {
     return {
@@ -477,6 +477,8 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
     };
   }
 
+  // Runtime-validate outcome against the enum; only AFTER this point is the
+  // AttemptOutcome cast below honest (safe assertion at a checked boundary).
   if (!["rejected", "partial", "promising"].includes(outcome)) {
     return {
       content: [{ type: "text", text: "Error: 'outcome' must be one of: rejected, partial, promising." }],
@@ -509,13 +511,14 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
 
   const attempt = sessions.recordAttempt(sessionId, {
     approach: approachRedacted,
-    outcome,
+    outcome: outcome as AttemptOutcome,
     critique: critiqueRedacted,
     rationale: args?.rationale ?? null,
     related_memory_id: args?.related_memory_id ?? null,
   });
 
-  // Activate the passive self_critique_count: any attempt with a critique is self-critique.
+  // Self-critique = articulating why a failed/partial approach fell short.
+  // Promising outcomes are confirmation, not self-critique, so they don't count.
   if ((outcome === "rejected" || outcome === "partial") && args?.critique) {
     session.self_critique_count = (session.self_critique_count ?? 0) + 1;
   }
@@ -525,9 +528,12 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
   notifyMemoryChange();
 
   const valueTag = outcome === "rejected" ? "(dead end — most valuable)" : outcome === "partial" ? "(partial)" : "(promising)";
+  // Echo the REDACTED approach (not the raw input) so the handler emits a single
+  // secret-safe variant; truncate to keep the confirmation message short.
+  const preview = approachRedacted.length > 80 ? approachRedacted.slice(0, 80) + "…" : approachRedacted;
   logger.flow("session_attempt", "recorded", { session_id: sessionId, seq: attempt?.seq, outcome });
   return {
-    content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${approach} ${valueTag}.` }],
+    content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${preview} ${valueTag}.` }],
   };
 }
 
