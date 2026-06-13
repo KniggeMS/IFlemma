@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { logger } from "../logger.js";
 import type { Session } from "../types.js";
+import type { Attempt, AttemptOutcome } from "../types.js";
 import { getDb, setDataDir } from "../db/database.js";
 
 let SESSIONS_DIR = path.join(os.homedir(), ".lemma");
@@ -341,4 +342,91 @@ export function formatSessionDetail(session: Session | null): string {
   }
   detail += `====================`;
   return detail;
+}
+
+function rowToAttempt(row: Record<string, unknown>): Attempt {
+  return {
+    session_id: (row.session_id as string) ?? "",
+    seq: row.seq as number,
+    approach: row.approach as string,
+    rationale: (row.rationale as string) ?? null,
+    outcome: row.outcome as AttemptOutcome,
+    critique: (row.critique as string) ?? null,
+    related_memory_id: (row.related_memory_id as number | null) ?? null,
+    confidence: row.confidence as number,
+    last_accessed_at: (row.last_accessed_at as string) ?? null,
+    access_count: (row.access_count as number) ?? 0,
+    created_at: (row.created_at as string) ?? new Date().toISOString(),
+  };
+}
+
+export function recordAttempt(
+  sessionId: string,
+  data: { approach: string; rationale?: string | null; outcome: AttemptOutcome; critique?: string | null; related_memory_id?: string | null },
+): Attempt | null {
+  const db = getDb();
+  const seqRow = db
+    .prepareCached("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM session_attempts WHERE session_id = ?")
+    .get(sessionId) as { next_seq: number };
+  const seq = seqRow.next_seq;
+
+  let relatedId: number | null = null;
+  if (data.related_memory_id) {
+    const row = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(data.related_memory_id) as { id: number } | undefined;
+    if (row) relatedId = row.id;
+  }
+
+  const result = db.prepareCached(
+    `INSERT INTO session_attempts (session_id, seq, approach, rationale, outcome, critique, related_memory_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(sessionId, seq, data.approach, data.rationale ?? null, data.outcome, data.critique ?? null, relatedId);
+
+  const row = db.prepareCached("SELECT * FROM session_attempts WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>;
+  return rowToAttempt(row);
+}
+
+export function loadAttemptsForSession(sessionId: string): Attempt[] {
+  const db = getDb();
+  const rows = db
+    .prepareCached("SELECT * FROM session_attempts WHERE session_id = ? ORDER BY seq ASC")
+    .all(sessionId) as Record<string, unknown>[];
+  return rows.map(rowToAttempt);
+}
+
+export function loadRecentAttempts(opts: { task_type: string; project?: string | null; limit?: number; minConfidence?: number }): Attempt[] {
+  const db = getDb();
+  const limit = opts.limit ?? 10;
+  const minConfidence = opts.minConfidence ?? 0.2;
+  const project = opts.project ?? null;
+  const rows = db
+    .prepareCached(
+      `SELECT sa.* FROM session_attempts sa
+       JOIN sessions s ON s.id = sa.session_id
+       WHERE s.task_type = ?
+         AND (s.project = ? OR s.project IS NULL)
+         AND sa.outcome IN ('rejected', 'partial')
+         AND sa.confidence >= ?
+       ORDER BY sa.confidence DESC, sa.created_at DESC
+       LIMIT ?`
+    )
+    .all(opts.task_type, project, minConfidence, limit) as Record<string, unknown>[];
+  return rows.map(rowToAttempt);
+}
+
+const ATTEMPT_DECAY_RATE = 0.002;
+
+export function decayAttempts(): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts SET confidence = MAX(0, confidence - ?) WHERE outcome IN ('rejected','partial','promising')`
+  ).run(ATTEMPT_DECAY_RATE);
+}
+
+export function boostAttempt(sessionId: string, seq: number, delta: number): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts
+     SET confidence = MIN(1, confidence + ?), access_count = access_count + 1, last_accessed_at = datetime('now')
+     WHERE session_id = ? AND seq = ?`
+  ).run(delta, sessionId, seq);
 }
