@@ -10,7 +10,7 @@ import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-sto
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
 import { loadConfig, estimateTokens } from "../memory/config.js";
-import type { FragmentType, AttemptOutcome, Session } from "../types.js";
+import type { FragmentType, Attempt, AttemptOutcome, Session } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -632,13 +632,25 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
   const approachRedacted = redactSecrets(approach).redacted;
   const critiqueRedacted = args?.critique ? redactSecrets(args.critique).redacted : null;
 
-  const attempt = sessions.recordAttempt(sessionId, {
-    approach: approachRedacted,
-    outcome: outcome as AttemptOutcome,
-    critique: critiqueRedacted,
-    rationale: args?.rationale ?? null,
-    related_memory_id: args?.related_memory_id ?? null,
-  });
+  // Best-effort: a DB hiccup (CHECK/UNIQUE violation, disk error) must surface as a clean
+  // tool error, not an uncaught throw that breaks the session_attempt flow. Mirrors the
+  // best-effort try/catch pattern used by session_end distill and session_start decay.
+  let attempt: Attempt | undefined;
+  try {
+    attempt = sessions.recordAttempt(sessionId, {
+      approach: approachRedacted,
+      outcome: outcome as AttemptOutcome,
+      critique: critiqueRedacted,
+      rationale: args?.rationale ?? null,
+      related_memory_id: args?.related_memory_id ?? null,
+    });
+  } catch (err) {
+    logger.warn("session_attempt recordAttempt failed", { error: String(err), session_id: sessionId });
+    return {
+      content: [{ type: "text", text: "Error: Could not record this attempt to the session store." }],
+      isError: true,
+    };
+  }
 
   // Self-critique = articulating why a failed/partial approach fell short.
   // Promising outcomes are confirmation, not self-critique, so they don't count.
