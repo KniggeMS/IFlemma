@@ -114,9 +114,10 @@ describe("session_start continuity recall", () => {
 
     const budget = loadConfig().token_budget.continuity;
     const startB = await handleSessionStart({ task_type: "debugging" });
-    // The continuity block alone must not vastly exceed the token budget (4 chars/token approx).
-    // We assert it stays bounded rather than emitting the whole 4000-char blob.
-    assert.ok(startB.content[0].text.length < big.length + 1000, "recall should truncate within the continuity budget");
+    const text = startB.content[0].text;
+    // The oversized approach (4000 chars) must NOT be echoed in full — the budget
+    // caps recall, so the continuity block truncates rather than dumping the whole blob.
+    assert.doesNotMatch(text, /x{4000}/, "the oversized approach must be truncated out of recall");
     assert.ok(budget > 0);
   });
 });

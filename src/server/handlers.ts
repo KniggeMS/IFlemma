@@ -260,21 +260,24 @@ function buildContinuityRecall(taskType: string): string {
 
   const budget = loadConfig().token_budget.continuity;
   const header = `\n\n## Prior reasoning on similar ${taskType} tasks`;
-  let used = estimateTokens(header);
+  const subheader = "\n### Dead ends (don't repeat)";
+  // Account for both the header and subheader so the budget is honest from the start.
+  let used = estimateTokens(header) + estimateTokens(subheader);
 
-  let block = header + "\n### Dead ends (don't repeat)";
+  let block = header + subheader;
+  // loadRecentAttempts already filters to rejected/partial; this re-filter is a defensive guard.
   const deadEnds = recent.filter(a => a.outcome === "rejected" || a.outcome === "partial");
   for (const a of deadEnds) {
     const line = `\n- Tried: ${a.approach}. Rejected because: ${a.critique ?? "unknown"}`;
-    if (used + estimateTokens(line) > budget) break; // rejected attempts never get truncated mid-item; stop adding
+    if (used + estimateTokens(line) > budget) break; // never truncate mid-item; stop adding
     block += line;
     used += estimateTokens(line);
   }
 
-  // Boost recalled attempts (they are relevant again) — learn from recall.
+  // Boost recalled attempts (they are relevant again) — best-effort; never break session_start.
   // Attempt.session_id is populated by rowToAttempt (Task 3) and the SELECT includes sa.*.
   for (const a of deadEnds) {
-    try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { /* best-effort */ }
+    try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { logger.debug("continuity_recall", "boost_failed"); }
   }
 
   return block;
