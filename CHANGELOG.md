@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.14.0] - 2026-06-14
 
 ### Added
 - **Reasoning continuity spec coverage** — three-layer recall (dead ends → lessons → warnings, spec §5.2), warning-fragment fallback for repeated dead ends with no guide (§5.3), and the accept→boost leg of the self-critique loop mirroring dismiss→penalize (§5.4). `memory_read` query results are now project-scoped and tracked into the active session's `memories_read`; `session_start` passes existing guides to `suggestGuides` so DB-only guides surface as tracked.
