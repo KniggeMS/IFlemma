@@ -17,6 +17,17 @@ function parseJsonArray(value: string | null | undefined): string[] {
   }
 }
 
+/**
+ * Canonical project key: trimmed + lowercased, or null for global.
+ * Applied on every write so that "Lemma", "lemma" and "  Lemma  " collapse to
+ * one bucket; getMemoryStats queries with `lower(project) = ?` to match.
+ */
+function normalizeProject(project: string | null | undefined): string | null {
+  if (!project || typeof project !== "string") return null;
+  const trimmed = project.trim();
+  return trimmed.length > 0 ? trimmed.toLowerCase() : null;
+}
+
 function rowToFragment(row: Record<string, any>, relations: MemoryRelation[] = []): MemoryFragment {
   return {
     id: row.legacy_id,
@@ -96,7 +107,7 @@ export function addMemory(
       `INSERT INTO memories (legacy_id, title, fragment, description, type, project, source)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(legacyId, resolvedTitle, fragment, resolvedDescription, resolvedType, project ?? null, source);
+    .run(legacyId, resolvedTitle, fragment, resolvedDescription, resolvedType, normalizeProject(project), source);
 
   const id = Number(result.lastInsertRowid);
   logger.info("Memory added", { id, legacy_id: legacyId });
@@ -200,7 +211,7 @@ export function updateMemory(
   }
   if (updates.project !== undefined) {
     setClauses.push("project = ?");
-    params.push(updates.project);
+    params.push(normalizeProject(updates.project));
   }
   if (updates.context_tags !== undefined) {
     setClauses.push("context_tags = ?");
@@ -532,7 +543,7 @@ export function getMemoryStats(
   project?: string | null,
 ): MemoryStats {
   const hasProject = typeof project === "string" && project.trim() !== "";
-  const projectWhere = hasProject ? " WHERE project = ?" : "";
+  const projectWhere = hasProject ? " WHERE lower(project) = ?" : "";
   const projectParams = hasProject ? [project!.trim().toLowerCase()] : [];
 
   const row = lemmaDb.prepareCached(

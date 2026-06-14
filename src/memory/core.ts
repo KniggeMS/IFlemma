@@ -22,7 +22,11 @@ export function generateId(): string {
 export function detectProject(): string | null {
   try {
     const cwd = process.cwd();
-    const projectName = path.basename(cwd);
+    // Normalize to the canonical project key (trimmed + lowercased) so every
+    // downstream store — memories.project, sessions.project, recall filters —
+    // compares against the same case. Without this, addMemory()'s normalized
+    // value and createSession()'s raw value diverge (e.g. "lemma" vs "Lemma").
+    const projectName = path.basename(cwd).trim().toLowerCase();
     const result = projectName || null;
     logger.flow("detect", "project", { project: result });
     return result;
