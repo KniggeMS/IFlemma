@@ -770,9 +770,11 @@ export async function saveMemorySafe(fragments: MemoryFragment[], options: { for
 
 export function applySessionDecay(): MemoryFragment[] {
   logger.flow("decay", "session_start");
-  const memory = loadMemory();
-  const decayed = decayConfidence(memory);
 
+  // Single source of truth: decay is applied once, in the DB, by store.decayMemories
+  // (24h rate-limited). Previously a second, in-memory decayConfidence() pass ran in
+  // parallel and returned a value that was NOT written back — so injected memory
+  // diverged from the DB across N calls (in-memory decayed N×, DB 1× per 24h).
   try {
     const db = getDb();
     store.decayMemories(db);
@@ -780,8 +782,10 @@ export function applySessionDecay(): MemoryFragment[] {
     logger.warn("Failed to apply decay in SQLite", { error: String(err) });
   }
 
+  // Return memory as it now actually stands in the DB after decay.
+  const memory = loadMemory();
   logger.flow("decay", "session_complete", { count: memory.length });
-  return decayed;
+  return memory;
 }
 
 export function migrateConfidenceFloor(): number {
