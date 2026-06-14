@@ -731,8 +731,27 @@ export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Pro
     }
   }
 
+  // On accept, boost the promising/successful attempts that produced this suggestion, reinforcing
+  // the productive path in future recall (spec §5.4: accept → +0.02 confidence, mirror of dismiss).
+  // Best-effort: a failure here must NOT undo the successful status update above.
+  if (action === "accept") {
+    try {
+      const suggestion = sessions.getSuggestion(id);
+      if (suggestion?.session_id) {
+        const attempts = sessions.loadAttemptsForSession(suggestion.session_id);
+        for (const a of attempts) {
+          if (a.outcome === "promising") {
+            sessions.boostAttempt(suggestion.session_id, a.seq, 0.02);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn("suggestion_respond accept boost failed", { error: String(err), id });
+    }
+  }
+
   const message = action === "accept"
-    ? `Accepted suggestion #${id}. It will no longer be surfaced.`
+    ? `Accepted suggestion #${id}. It will no longer be surfaced; related promising attempts were reinforced.`
     : `Dismissed suggestion #${id}. It will no longer be surfaced; related dead ends were de-prioritized.`;
   logger.flow("suggestion_respond", "complete", { id, action });
   return {

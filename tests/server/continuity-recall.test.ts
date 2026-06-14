@@ -282,4 +282,43 @@ describe("suggestion_respond (accept/dismiss)", () => {
     const row = getDb().prepareCached("SELECT status FROM improvement_suggestions WHERE id = ?").get(id) as { status: string };
     assert.equal(row.status, "dismissed");
   });
+
+  test("accept boosts the source session's promising attempts (mirror of dismiss)", async () => {
+    // 1. Start a session + record two attempts (one rejected, one promising).
+    await handleSessionStart({ task_type: "debugging", technologies: ["react"] });
+    await handleSessionAttempt({ approach: "rejected-untouched-marker2", outcome: "rejected", critique: "re-render loop" });
+    await handleSessionAttempt({ approach: "promising-boost-marker2", outcome: "promising" });
+    const { loadSessions, findActiveSession, saveImprovementSuggestion, loadPendingSuggestions } = await import("../../src/sessions/index.js");
+    const active = findActiveSession(loadSessions());
+    assert.ok(active, "expected an active session after handleSessionStart");
+    const sessionId = active!.session_id;
+    await handleSessionEnd({ outcome: "success" });
+
+    // Capture attempt confidences BEFORE (default is 0.5 per schema.ts session_attempts).
+    const before = loadAttemptsForSession(sessionId);
+    assert.equal(before.length, 2);
+    const rejectedBefore = before.find(a => a.approach === "rejected-untouched-marker2")!;
+    const promisingBefore = before.find(a => a.approach === "promising-boost-marker2")!;
+
+    // 2. Persist an improvement suggestion anchored to that session and accept it.
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    const id = saveImprovementSuggestion(sessionId, "tip");
+    assert.ok(loadPendingSuggestions().some(s => s.id === id));
+
+    // 3. Accept — should boost only the promising attempt (+0.02), leave rejected untouched.
+    const res = await handleSuggestionRespond({ id, action: "accept" });
+    assert.equal(res.isError, undefined);
+    assert.match(res.content[0].text, /reinforced/i);
+
+    // 4. Verify: promising confidence rose by 0.02, rejected unchanged, status is 'accepted'.
+    const after = loadAttemptsForSession(sessionId);
+    const rejectedAfter = after.find(a => a.approach === "rejected-untouched-marker2")!;
+    const promisingAfter = after.find(a => a.approach === "promising-boost-marker2")!;
+    assert.ok(promisingAfter.confidence > promisingBefore.confidence, "promising attempt confidence should rise on accept");
+    assert.equal(Math.round((promisingAfter.confidence - promisingBefore.confidence) * 1000) / 1000, 0.02, "promising boosted by exactly 0.02");
+    assert.equal(rejectedAfter.confidence, rejectedBefore.confidence, "rejected attempt must NOT be boosted");
+
+    const row = getDb().prepareCached("SELECT status FROM improvement_suggestions WHERE id = ?").get(id) as { status: string };
+    assert.equal(row.status, "accepted");
+  });
 });
