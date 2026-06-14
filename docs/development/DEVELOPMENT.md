@@ -50,8 +50,8 @@ src/
 │   └── index.ts          # Barrel exports
 ├── server/
 │   ├── index.ts          # Server setup, memory injection, notifications, lifecycle
-│   ├── handlers.ts       # 24 tool handlers + intelligence hooks + response hooks
-│   ├── tools.ts          # MCP tool definitions (24 tools)
+│   ├── handlers.ts       # 26 tool handlers + intelligence hooks + response hooks
+│   ├── tools.ts          # MCP tool definitions (26 tools)
 │   ├── hooks.ts          # Hook system & prompt modifiers
 │   ├── system-prompt.ts  # Dynamic system prompt generation
 │   ├── agents-md.ts      # AGENTS.md injection with Lemma system instructions
@@ -174,7 +174,7 @@ npm run test:server                         # Server tests only
 
 ## Adding New Features
 
-New tools can be added as needed. The current tool count is 24. See [ROADMAP.md](./ROADMAP.md) for planned features and [HANDLERS-REFACTOR.md](./HANDLERS-REFACTOR.md) for the ongoing targeted SQL migration.
+New tools can be added as needed. The current tool count is 26 (24 core memory/guide/session tools + `session_attempt` and `suggestion_respond` for the reasoning-continuity self-critique loop). See [ROADMAP.md](./ROADMAP.md) for planned features and [HANDLERS-REFACTOR.md](./HANDLERS-REFACTOR.md) for the ongoing targeted SQL migration.
 
 ## Dependencies
 
