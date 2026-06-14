@@ -8,7 +8,9 @@ import * as store from "../db/memory-store.js";
 
 import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-store.js";
 import * as intel from "../intelligence/index.js";
-import type { FragmentType } from "../types.js";
+import { redactSecrets } from "../memory/privacy.js";
+import { loadConfig, estimateTokens } from "../memory/config.js";
+import type { FragmentType, Attempt, AttemptOutcome, Session, SuggestionStatus } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -19,12 +21,26 @@ interface SessionStartArgs {
   task_type?: string;
   technologies?: string[];
   initial_approach?: string;
+  project?: string;
 }
 
 interface SessionEndArgs {
   outcome?: string;
   final_approach?: string;
   lessons?: string[];
+}
+
+interface SessionAttemptArgs {
+  approach?: string;
+  outcome?: string;
+  critique?: string;
+  rationale?: string;
+  related_memory_id?: string;
+}
+
+interface SuggestionRespondArgs {
+  id?: number;
+  action?: string;
 }
 
 interface MemoryReadArgs {
@@ -244,12 +260,167 @@ function notifyMemoryChange(): void {
   }
 }
 
+function buildContinuityRecall(taskType: string, project: string | null = null): string {
+  const budget = loadConfig().token_budget.continuity;
+
+  // Layer 1 — dead ends (rejected/partial attempts from similar prior sessions).
+  const recent = sessions.loadRecentAttempts({ task_type: taskType, project, limit: 15, minConfidence: 0.2 });
+  const deadEnds = recent.filter(a => a.outcome === "rejected" || a.outcome === "partial");
+
+  // Layer 2 — lessons captured at the end of completed similar sessions.
+  const lessons: string[] = [];
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT s.lessons FROM sessions s
+       WHERE s.status = 'completed' AND s.task_type = ? AND s.lessons IS NOT NULL
+         AND (s.project = ? OR s.project IS NULL)
+       ORDER BY s.ended_at DESC LIMIT 5`
+    ).all(taskType, project) as { lessons: string | null }[];
+    for (const r of rows) {
+      if (!r.lessons) continue;
+      try {
+        const parsed = JSON.parse(r.lessons) as unknown;
+        if (Array.isArray(parsed)) for (const l of parsed) if (typeof l === "string" && l.trim()) lessons.push(l.trim());
+      } catch { /* malformed JSON — skip this session's lessons */ }
+    }
+  } catch (err) {
+    logger.warn("continuity_recall lessons_load_failed", { error: String(err) });
+  }
+
+  // Layer 3 — warning fragments recorded for this project (or global).
+  const warnings: { title: string | null; fragment: string }[] = [];
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT title, fragment FROM memories
+       WHERE type = 'warning' AND (project = ? OR project IS NULL)
+       ORDER BY confidence DESC, access_count DESC LIMIT 5`
+    ).all(project) as { title: string | null; fragment: string }[];
+    warnings.push(...rows);
+  } catch (err) {
+    logger.warn("continuity_recall warnings_load_failed", { error: String(err) });
+  }
+
+  if (deadEnds.length === 0 && lessons.length === 0 && warnings.length === 0) return "";
+
+  const header = `\n\n## Prior reasoning on similar ${taskType} tasks`;
+  let used = estimateTokens(header);
+  let block = header;
+
+  // Dead ends (highest priority).
+  if (deadEnds.length > 0) {
+    const sub = "\n### Dead ends (don't repeat)";
+    block += sub;
+    used += estimateTokens(sub);
+    for (const a of deadEnds) {
+      const line = `\n- Tried: ${a.approach}. Rejected because: ${a.critique ?? "unknown"}`;
+      if (used + estimateTokens(line) > budget) break; // never truncate mid-item; stop adding
+      block += line;
+      used += estimateTokens(line);
+    }
+    // Boost recalled attempts (they are relevant again) — best-effort; never break session_start.
+    for (const a of deadEnds) {
+      try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { logger.debug("continuity_recall", "boost_failed"); }
+    }
+  }
+
+  // Lessons (second priority).
+  if (lessons.length > 0) {
+    const sub = "\n### What worked / lessons";
+    if (used + estimateTokens(sub) <= budget) {
+      block += sub;
+      used += estimateTokens(sub);
+      for (const l of lessons) {
+        const line = `\n- ${l}`;
+        if (used + estimateTokens(line) > budget) break;
+        block += line;
+        used += estimateTokens(line);
+      }
+    }
+  }
+
+  // Warnings (third priority).
+  if (warnings.length > 0) {
+    const sub = "\n### Warnings";
+    if (used + estimateTokens(sub) <= budget) {
+      block += sub;
+      used += estimateTokens(sub);
+      for (const w of warnings) {
+        const text = (w.title && w.title.trim()) || (w.fragment.length > 120 ? w.fragment.slice(0, 120) + "…" : w.fragment);
+        const line = `\n- ${text}`;
+        if (used + estimateTokens(line) > budget) break;
+        block += line;
+        used += estimateTokens(line);
+      }
+    }
+  }
+
+  return block;
+}
+
+// Distills REPEATED dead-ends (rejected/partial attempts that recur across sessions
+// with the same task_type) into the most-recently-practiced guide's known_pitfalls list.
+// Uses the existing TF-IDF engine (findSemanticSimilarPairs @ >= 0.5) so a one-off
+// dead-end with no prior match is never distilled (no false positives). Returns the
+// list of pitfall strings actually distilled this call.
+function distillRepeatedDeadEnds(session: Session): string[] {
+  const distilled: string[] = [];
+  const currentAttempts = sessions.loadAttemptsForSession(session.session_id).filter(a => a.outcome === "rejected" || a.outcome === "partial");
+  if (currentAttempts.length === 0) return distilled;
+
+  // Gather past rejected/partial attempts from OTHER sessions with the same task_type.
+  const pastRows = getDb().prepareCached(
+    `SELECT sa.approach, sa.critique FROM session_attempts sa
+     JOIN sessions s ON s.id = sa.session_id
+     WHERE s.id != ? AND s.task_type = ? AND sa.outcome IN ('rejected','partial')`
+  ).all(session.session_id, session.task_type) as { approach: string; critique: string | null }[];
+
+  if (pastRows.length === 0) return distilled;
+
+  const pastTexts = pastRows.map(r => `${r.approach} ${r.critique ?? ""}`);
+  const guideDb = getDb();
+  for (const cur of currentAttempts) {
+    const candidate = { id: cur.session_id + ":" + cur.seq, text: `${cur.approach} ${cur.critique ?? ""}` };
+    // Reuse the existing TF-IDF similarity: build vectors over [candidate + past], find pairs >= 0.5.
+    const corpus = [
+      { id: candidate.id, title: "", fragment: candidate.text, description: "" },
+      ...pastTexts.map((t, i) => ({ id: `past${i}`, title: "", fragment: t, description: "" })),
+    ];
+    const vectors = intel.buildVectors(corpus as any);
+    const pairs = intel.findSemanticSimilarPairs(vectors, 0.5, 5);
+    const matched = pairs.some(p => p.id_a === candidate.id || p.id_b === candidate.id);
+    if (!matched) continue;
+
+    // Distill into the most recently practiced guide for this session, if any.
+    const guideName = session.guides_used?.[session.guides_used.length - 1];
+    const guide = guideName ? guides.getGuideFromDb(guideName) : null;
+    if (!guide) {
+      // No guide to distill into — record a warning fragment so the repeated dead end
+      // still surfaces in future recall (spec §5.3: guide-missing → warning fragment).
+      try {
+        const warningText = `Repeated dead end on ${session.task_type}: "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
+        store.addMemory(guideDb, warningText, "ai", `Repeated dead end: ${session.task_type}`, session.project, undefined, "warning");
+      } catch (err) {
+        logger.warn("distillRepeatedDeadEnds warning fragment failed", { error: String(err) });
+      }
+      continue;
+    }
+    const pitfall = `Approach "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
+    guide.known_pitfalls = Array.from(new Set([...(guide.known_pitfalls ?? []), pitfall]));
+    guides.upsertGuideToDb(guideDb, guide);
+    distilled.push(pitfall);
+  }
+  return distilled;
+}
+
 export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolResult> {
   const taskType = args?.task_type;
   const technologies = args?.technologies || [];
   const initialApproach = args?.initial_approach || null;
+  const project = args?.project || core.detectProject() || null;
 
-  logger.flow("session_start", "start", { task_type: taskType, technologies, has_initial_approach: !!initialApproach });
+  logger.flow("session_start", "start", { task_type: taskType, technologies, has_initial_approach: !!initialApproach, project });
 
   if (!taskType) {
     logger.warn("session_start validation failed", { reason: "missing task_type" });
@@ -268,7 +439,12 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
     existing.task_outcome = "abandoned";
   }
 
-  const session = sessions.createSession(taskType, technologies);
+  const session = sessions.createSession(taskType, technologies, project);
+  try {
+    sessions.decayAttempts();
+  } catch (err) {
+    logger.warn("session_start decayAttempts failed", { error: String(err) });
+  }
   session.initial_approach = initialApproach;
   activeSessionId = session.session_id;
   allSessions.push(session);
@@ -276,7 +452,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   sessions.saveSessions(allSessions);
 
   const taskDesc = [taskType, ...technologies].join(" ");
-  const suggestions = guides.suggestGuides(taskDesc, []);
+  const suggestions = guides.suggestGuides(taskDesc, guides.loadGuides());
   logger.flow("session_start", "guide_suggestions", { task_desc: taskDesc, relevant: suggestions.relevant.length, suggested: suggestions.suggested.length });
 
   const formattedSuggestions = guides.formatSuggestions(suggestions);
@@ -309,6 +485,26 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   response += `\n${formattedSuggestions}`;
 
   logger.flow("session_start", "complete", { session_id: session.session_id, task_type: taskType, suggestions: suggestions.relevant.length + suggestions.suggested.length, preloaded: relevantResults.length });
+
+  const continuity = buildContinuityRecall(taskType, project);
+  if (continuity) {
+    response += continuity;
+  }
+
+  // Surface pending improvement suggestions from past sessions as OFFERS (consider; never enforced).
+  let pendingSuggestions: { id: number; suggestion: string }[] = [];
+  try {
+    pendingSuggestions = sessions.loadPendingSuggestions(3).map(s => ({ id: s.id, suggestion: s.suggestion }));
+  } catch (err) {
+    logger.warn("session_start loadPendingSuggestions failed", { error: String(err) });
+  }
+  if (pendingSuggestions.length > 0) {
+    response += `\n\n## Past improvement suggestions (consider; dismiss if not relevant)\n`;
+    for (const s of pendingSuggestions) {
+      response += `- [${s.id}] ${s.suggestion}\n`;
+    }
+  }
+
   return {
     content: [{ type: "text", text: response }],
   };
@@ -374,6 +570,25 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   }
 
   logger.data("sessions", "save", { session_id: session.session_id, outcome });
+
+  // Distill repeated dead-ends into guide pitfalls (best-effort; never break session_end).
+  let distilledPitfalls: string[] = [];
+  try {
+    distilledPitfalls = distillRepeatedDeadEnds(session);
+  } catch (err) {
+    logger.warn("session_end distill failed", { error: String(err) });
+  }
+
+  // Persist low-success improvement lines so they can be surfaced as OFFERS at the next
+  // session_start (never enforced). best-effort; never break session_end.
+  for (const line of improvementLines) {
+    try {
+      sessions.saveImprovementSuggestion(session.session_id, line.trim());
+    } catch (err) {
+      logger.warn("session_end saveImprovementSuggestion failed", { error: String(err) });
+    }
+  }
+
   sessions.saveSessions(allSessions);
   activeSessionId = null;
 
@@ -384,6 +599,9 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   }
   if (improvementLines.length > 0) {
     response += `\nIMPROVEMENT SUGGESTIONS:\n${improvementLines.join("\n")}\n`;
+  }
+  if (distilledPitfalls.length > 0) {
+    response += `\nDistilled ${distilledPitfalls.length} repeated dead-end(s) into guide pitfalls.\n`;
   }
 
   const sCtx = getSessionContext();
@@ -457,6 +675,199 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   };
 }
 
+export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<ToolResult> {
+  const approach = args?.approach;
+  const outcome = args?.outcome;
+
+  if (!approach || !outcome) {
+    return {
+      content: [{ type: "text", text: "Error: 'approach' and 'outcome' are required for session_attempt." }],
+      isError: true,
+    };
+  }
+
+  // Runtime-validate outcome against the enum; only AFTER this point is the
+  // AttemptOutcome cast below honest (safe assertion at a checked boundary).
+  if (!["rejected", "partial", "promising"].includes(outcome)) {
+    return {
+      content: [{ type: "text", text: "Error: 'outcome' must be one of: rejected, partial, promising." }],
+      isError: true,
+    };
+  }
+
+  const sessionId = activeSessionId;
+  if (!sessionId) {
+    logger.warn("session_attempt no active session", {});
+    return {
+      content: [{ type: "text", text: "Error: No active session. Call session_start before recording attempts." }],
+      isError: true,
+    };
+  }
+
+  const allSessions = sessions.loadSessions();
+  const session = sessions.findSession(allSessions, sessionId);
+  if (!session) {
+    return {
+      content: [{ type: "text", text: "Error: Active session not found in store." }],
+      isError: true,
+    };
+  }
+
+  // Redact secrets from free-text fields before persisting (reuses memory/privacy.ts —
+  // attempts contain reasoning that may paste in tokens/keys). rationale is short and optional; left as-is.
+  const approachRedacted = redactSecrets(approach).redacted;
+  const critiqueRedacted = args?.critique ? redactSecrets(args.critique).redacted : null;
+
+  // Best-effort: a DB hiccup (CHECK/UNIQUE violation, disk error) must surface as a clean
+  // tool error, not an uncaught throw that breaks the session_attempt flow. Mirrors the
+  // best-effort try/catch pattern used by session_end distill and session_start decay.
+  let attempt: Attempt | undefined;
+  try {
+    attempt = sessions.recordAttempt(sessionId, {
+      approach: approachRedacted,
+      outcome: outcome as AttemptOutcome,
+      critique: critiqueRedacted,
+      rationale: args?.rationale ?? null,
+      related_memory_id: args?.related_memory_id ?? null,
+    });
+  } catch (err) {
+    logger.warn("session_attempt recordAttempt failed", { error: String(err), session_id: sessionId });
+    return {
+      content: [{ type: "text", text: "Error: Could not record this attempt to the session store." }],
+      isError: true,
+    };
+  }
+
+  // Self-critique = articulating why a failed/partial approach fell short.
+  // Promising outcomes are confirmation, not self-critique, so they don't count.
+  if ((outcome === "rejected" || outcome === "partial") && args?.critique) {
+    session.self_critique_count = (session.self_critique_count ?? 0) + 1;
+  }
+  session.refinement_attempts = (session.refinement_attempts ?? 0) + 1;
+  sessions.saveSessions(allSessions);
+
+  notifyMemoryChange();
+
+  const valueTag = outcome === "rejected" ? "(dead end — most valuable)" : outcome === "partial" ? "(partial)" : "(promising)";
+  // Echo the REDACTED approach (not the raw input) so the handler emits a single
+  // secret-safe variant; truncate to keep the confirmation message short.
+  const preview = approachRedacted.length > 80 ? approachRedacted.slice(0, 80) + "…" : approachRedacted;
+  logger.flow("session_attempt", "recorded", { session_id: sessionId, seq: attempt?.seq, outcome });
+  return {
+    content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${preview} ${valueTag}.` }],
+  };
+}
+
+export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Promise<ToolResult> {
+  const id = args?.id;
+  const action = args?.action;
+
+  if (id === undefined || action === undefined) {
+    return {
+      content: [{ type: "text", text: "Error: 'id' and 'action' are required for suggestion_respond." }],
+      isError: true,
+    };
+  }
+
+  if (!["accept", "dismiss"].includes(action)) {
+    return {
+      content: [{ type: "text", text: "Error: 'action' must be one of: accept, dismiss." }],
+      isError: true,
+    };
+  }
+
+  logger.flow("suggestion_respond", "start", { id, action });
+
+  // Map the tool's verb to the stored status enum value (accept -> accepted, dismiss -> dismissed).
+  const status: SuggestionStatus = action === "accept" ? "accepted" : "dismissed";
+
+  // Best-effort: a bad/missing id (or DB hiccup) must surface as a clean tool error, mirroring the
+  // best-effort try/catch used by session_attempt's recordAttempt.
+  try {
+    sessions.updateSuggestionStatus(id, status);
+  } catch (err) {
+    logger.warn("suggestion_respond updateSuggestionStatus failed", { error: String(err), id, action });
+    return {
+      content: [{ type: "text", text: "Error: Could not update this suggestion in the store." }],
+      isError: true,
+    };
+  }
+
+  // On dismiss, penalize the dead-end attempts that produced this suggestion, so the same
+  // failed path is de-prioritized in future recall (spec §5.4: dismiss → −0.02 confidence).
+  // Best-effort: a failure here must NOT undo the successful status update above.
+  if (action === "dismiss") {
+    try {
+      const suggestion = sessions.getSuggestion(id);
+      if (suggestion?.session_id) {
+        const attempts = sessions.loadAttemptsForSession(suggestion.session_id);
+        for (const a of attempts) {
+          if (a.outcome === "rejected" || a.outcome === "partial") {
+            sessions.penalizeAttempt(suggestion.session_id, a.seq, 0.02);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn("suggestion_respond dismiss penalize failed", { error: String(err), id });
+    }
+  }
+
+  // On accept, boost the promising/successful attempts that produced this suggestion, reinforcing
+  // the productive path in future recall (spec §5.4: accept → +0.02 confidence, mirror of dismiss).
+  // Best-effort: a failure here must NOT undo the successful status update above.
+  if (action === "accept") {
+    try {
+      const suggestion = sessions.getSuggestion(id);
+      if (suggestion?.session_id) {
+        const attempts = sessions.loadAttemptsForSession(suggestion.session_id);
+        for (const a of attempts) {
+          if (a.outcome === "promising") {
+            sessions.boostAttempt(suggestion.session_id, a.seq, 0.02);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn("suggestion_respond accept boost failed", { error: String(err), id });
+    }
+  }
+
+  const message = action === "accept"
+    ? `Accepted suggestion #${id}. It will no longer be surfaced; related promising attempts were reinforced.`
+    : `Dismissed suggestion #${id}. It will no longer be surfaced; related dead ends were de-prioritized.`;
+  logger.flow("suggestion_respond", "complete", { id, action });
+  return {
+    content: [{ type: "text", text: message }],
+  };
+}
+
+/**
+ * Track read fragment IDs into the active formal/virtual session's `memories_read`.
+ * Required so `guide_practice` validation can link guides to the memories that informed them.
+ * Best-effort: never throws (memory_read must not fail because session-tracking failed).
+ */
+function trackReadIntoSession(readIds: string[]): void {
+  if (!activeSessionId || readIds.length === 0) return;
+  try {
+    const allSessions = sessions.loadSessions();
+    const session = sessions.findSession(allSessions, activeSessionId);
+    if (!session) return;
+    const existing = new Set(session.memories_read || []);
+    let added = false;
+    for (const id of readIds) {
+      if (!existing.has(id)) {
+        existing.add(id);
+        added = true;
+      }
+    }
+    if (!added) return;
+    session.memories_read = [...existing];
+    sessions.saveSessions([session]);
+    logger.flow("memory_read", "session_track_read", { session_id: activeSessionId, count: session.memories_read.length });
+  } catch (error: unknown) {
+    logger.warn("memory_read session_track_read failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResult> {
   const currentProject = args?.project || core.detectProject();
   const query = args?.query || null;
@@ -470,16 +881,19 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   if (detailIds && Array.isArray(detailIds) && detailIds.length > 0) {
     logger.debug("memory_read batch_ids", { ids: detailIds });
     const results: string[] = [];
+    const readIds: string[] = [];
     for (const did of detailIds) {
       const fragment = core.getFragmentById(did);
       if (fragment) {
         const boosted = core.boostOnAccess(fragment, context);
         results.push(core.formatMemoryDetail(boosted));
+        readIds.push(did);
       } else {
         logger.warn("memory_read batch_id not_found", { id: did });
         results.push(`Fragment [${did}] not found.`);
       }
     }
+    trackReadIntoSession(readIds);
     notifyMemoryChange();
     logger.flow("memory_read", "complete_batch", { ids_requested: detailIds.length });
     return {
@@ -498,6 +912,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
       };
     }
     const boosted = core.boostOnAccess(fragment, context);
+    trackReadIntoSession([detailId]);
     notifyMemoryChange();
 
     logger.flow("memory_read", "complete_single", { id: detailId, confidence: boosted.confidence?.toFixed(2) });
@@ -511,9 +926,14 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     results = core.searchMemory(query, { limit: 30 });
   } else {
     results = core.searchMemory("", { limit: 200 });
-    if (!showAll) {
-      results = core.filterByProject(results, currentProject);
-    }
+  }
+  // Apply project scope to BOTH query and browse modes (only showAll escapes it).
+  // Without this, query mode returned cross-project matches and auto-linked them
+  // permanently (associatedWith + related_to), causing cross-project data pollution.
+  if (!showAll) {
+    results = core.filterByProject(results, currentProject);
+  }
+  if (!query) {
     results = results.slice(0, 30);
   }
 
@@ -529,6 +949,9 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   for (const frag of results) {
     core.boostOnAccess(frag, context);
   }
+
+  // Record which fragments were read into the active session (for guide_practice validation).
+  trackReadIntoSession([...resultIds]);
 
   if (query && resultIds.size > 1) {
     const idArray = [...resultIds];
@@ -1201,7 +1624,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
   logger.flow("guide_get", "start", { category, guide: guideName, task });
 
   if (task) {
-    const result = guides.suggestGuides(task, []);
+    const result = guides.suggestGuides(task, guides.loadGuides());
     logger.flow("guide_get", "task_suggestions", { task, relevant: result.relevant.length, suggested: result.suggested.length });
     const formatted = guides.formatSuggestions(result);
     return {
@@ -1900,6 +2323,16 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
       }
       case "session_end": {
         const result = await handleSessionEnd(args as SessionEndArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "session_attempt": {
+        const result = await handleSessionAttempt(args as SessionAttemptArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "suggestion_respond": {
+        const result = await handleSuggestionRespond(args as SuggestionRespondArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }

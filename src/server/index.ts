@@ -22,6 +22,7 @@ import { setNotifyChange } from "./handlers.js";
 import { logger, initLogger } from "../logger.js";
 import * as traffic from "./traffic-log.js";
 import * as agentsMd from "./agents-md.js";
+import { VERSION } from "../version.js";
 
 export let detectedProject: string | null = null;
 
@@ -32,7 +33,7 @@ export function setDetectedProject(p: string | null): void {
 const server = new Server(
   {
     name: "lemma",
-    version: "1.0.0",
+    version: VERSION,
   },
   {
     capabilities: {
@@ -85,7 +86,7 @@ server.setRequestHandler(InitializeRequestSchema, async (_request) => {
     },
     serverInfo: {
       name: "lemma",
-      version: "1.0.0",
+      version: VERSION,
     },
     instructions,
   };

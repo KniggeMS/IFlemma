@@ -68,6 +68,10 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
   VALUES (new.id, new.title, new.fragment, new.description);
 END;
 
+-- RESERVED for v0.14: this vec0 table is scaffolding for a possible embedding
+-- pipeline. As of v0.13 nothing writes here (addMemory does not INSERT), so it
+-- stays empty and searchByVector() returns []. Live semantic search is TF-IDF
+-- (src/intelligence/semantic.ts). See spec §5.3.
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
   embedding float[384]
 );
@@ -228,4 +232,37 @@ CREATE INDEX IF NOT EXISTS idx_feedback_memory ON feedback_log(memory_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_log(created_at);
 `;
 
-export const MIGRATIONS: [number, string][] = [[1, SCHEMA_V1]];
+export const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS session_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  approach TEXT NOT NULL,
+  rationale TEXT,
+  outcome TEXT NOT NULL CHECK(outcome IN ('rejected','partial','promising')),
+  critique TEXT,
+  related_memory_id INTEGER REFERENCES memories(id) ON DELETE SET NULL,
+  confidence REAL DEFAULT 0.5 NOT NULL,
+  last_accessed_at TEXT,
+  access_count INTEGER DEFAULT 0 NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+  UNIQUE(session_id, seq),
+  CHECK (confidence >= 0 AND confidence <= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attempts_session ON session_attempts(session_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_outcome ON session_attempts(outcome);
+
+CREATE TABLE IF NOT EXISTS improvement_suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  suggestion TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'offered' CHECK(status IN ('offered','accepted','dismissed')),
+  created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+  resolved_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_suggestions_status ON improvement_suggestions(status);
+`;
+
+export const MIGRATIONS: [number, string][] = [[1, SCHEMA_V1], [2, SCHEMA_V2]];

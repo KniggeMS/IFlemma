@@ -22,7 +22,11 @@ export function generateId(): string {
 export function detectProject(): string | null {
   try {
     const cwd = process.cwd();
-    const projectName = path.basename(cwd);
+    // Normalize to the canonical project key (trimmed + lowercased) so every
+    // downstream store — memories.project, sessions.project, recall filters —
+    // compares against the same case. Without this, addMemory()'s normalized
+    // value and createSession()'s raw value diverge (e.g. "lemma" vs "Lemma").
+    const projectName = path.basename(cwd).trim().toLowerCase();
     const result = projectName || null;
     logger.flow("detect", "project", { project: result });
     return result;
@@ -770,9 +774,11 @@ export async function saveMemorySafe(fragments: MemoryFragment[], options: { for
 
 export function applySessionDecay(): MemoryFragment[] {
   logger.flow("decay", "session_start");
-  const memory = loadMemory();
-  const decayed = decayConfidence(memory);
 
+  // Single source of truth: decay is applied once, in the DB, by store.decayMemories
+  // (24h rate-limited). Previously a second, in-memory decayConfidence() pass ran in
+  // parallel and returned a value that was NOT written back — so injected memory
+  // diverged from the DB across N calls (in-memory decayed N×, DB 1× per 24h).
   try {
     const db = getDb();
     store.decayMemories(db);
@@ -780,8 +786,10 @@ export function applySessionDecay(): MemoryFragment[] {
     logger.warn("Failed to apply decay in SQLite", { error: String(err) });
   }
 
+  // Return memory as it now actually stands in the DB after decay.
+  const memory = loadMemory();
   logger.flow("decay", "session_complete", { count: memory.length });
-  return decayed;
+  return memory;
 }
 
 export function migrateConfidenceFloor(): number {

@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { logger } from "../logger.js";
 import type { Session } from "../types.js";
+import type { Attempt, AttemptOutcome, ImprovementSuggestion, SuggestionStatus } from "../types.js";
 import { getDb, setDataDir } from "../db/database.js";
 
 let SESSIONS_DIR = path.join(os.homedir(), ".lemma");
@@ -47,6 +48,7 @@ function rowToSession(
     lessons,
     status: (row.status as "active" | "completed" | "abandoned") ?? "active",
     completed_at: (row.ended_at as string) ?? undefined,
+    project: (row.project as string | null) ?? null,
   };
 }
 
@@ -128,8 +130,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
     const upsertStmt = db.prepareCached(`
       INSERT INTO sessions (
         id, task_type, technologies, initial_approach, final_approach, approach_changed,
-        outcome, refinement_attempts, self_critique_count, lessons, status, started_at, ended_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        outcome, refinement_attempts, self_critique_count, lessons, status, started_at, ended_at, project
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         task_type = excluded.task_type,
         technologies = excluded.technologies,
@@ -141,7 +143,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
         self_critique_count = excluded.self_critique_count,
         lessons = excluded.lessons,
         status = excluded.status,
-        ended_at = excluded.ended_at
+        ended_at = excluded.ended_at,
+        project = COALESCE(excluded.project, sessions.project)
     `);
 
     const { db: rawDb } = db;
@@ -167,6 +170,7 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
           s.status || "active",
           s.timestamp,
           s.completed_at || null,
+          s.project ?? null,
         );
 
         if (s.guides_used && s.guides_used.length > 0) {
@@ -209,8 +213,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
   }
 }
 
-export function createSession(taskType: string, technologies: string[] = []): Session {
-  logger.flow("session_create", "start", { taskType, technologies });
+export function createSession(taskType: string, technologies: string[] = [], project: string | null = null): Session {
+  logger.flow("session_create", "start", { taskType, technologies, project });
   const sessionId = generateSessionId();
   const now = new Date().toISOString();
 
@@ -231,16 +235,17 @@ export function createSession(taskType: string, technologies: string[] = []): Se
     approach_changed: false,
     lessons: [],
     status: "active",
+    project,
   };
 
   try {
     const db = getDb();
     const techJson = technologies.length > 0 ? JSON.stringify(technologies) : null;
     db.prepareCached(
-      `INSERT INTO sessions (id, task_type, technologies, status, started_at)
-       VALUES (?, ?, ?, 'active', ?)`
-    ).run(sessionId, taskType, techJson, now);
-    logger.flow("session_create", "created", { sessionId });
+      `INSERT INTO sessions (id, task_type, technologies, status, started_at, project)
+       VALUES (?, ?, ?, 'active', ?, ?)`
+    ).run(sessionId, taskType, techJson, now, project);
+    logger.flow("session_create", "created", { sessionId, project });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error("Failed to persist new session to SQLite", msg);
@@ -341,4 +346,139 @@ export function formatSessionDetail(session: Session | null): string {
   }
   detail += `====================`;
   return detail;
+}
+
+function rowToAttempt(row: Record<string, unknown>): Attempt {
+  return {
+    session_id: (row.session_id as string) ?? "",
+    seq: row.seq as number,
+    approach: row.approach as string,
+    rationale: (row.rationale as string) ?? null,
+    outcome: row.outcome as AttemptOutcome,
+    critique: (row.critique as string) ?? null,
+    related_memory_id: (row.related_memory_id as number | null) ?? null,
+    confidence: row.confidence as number,
+    last_accessed_at: (row.last_accessed_at as string) ?? null,
+    access_count: (row.access_count as number) ?? 0,
+    created_at: (row.created_at as string) ?? new Date().toISOString(),
+  };
+}
+
+export function recordAttempt(
+  sessionId: string,
+  data: { approach: string; rationale?: string | null; outcome: AttemptOutcome; critique?: string | null; related_memory_id?: string | null },
+): Attempt {
+  const db = getDb();
+  const seqRow = db
+    .prepareCached("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM session_attempts WHERE session_id = ?")
+    .get(sessionId) as { next_seq: number };
+  const seq = seqRow.next_seq;
+
+  let relatedId: number | null = null;
+  if (data.related_memory_id) {
+    const row = db.prepareCached("SELECT id FROM memories WHERE legacy_id = ?").get(data.related_memory_id) as { id: number } | undefined;
+    if (row) relatedId = row.id;
+  }
+
+  const result = db.prepareCached(
+    `INSERT INTO session_attempts (session_id, seq, approach, rationale, outcome, critique, related_memory_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(sessionId, seq, data.approach, data.rationale ?? null, data.outcome, data.critique ?? null, relatedId);
+
+  const row = db.prepareCached("SELECT * FROM session_attempts WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>;
+  return rowToAttempt(row);
+}
+
+export function loadAttemptsForSession(sessionId: string): Attempt[] {
+  const db = getDb();
+  const rows = db
+    .prepareCached("SELECT * FROM session_attempts WHERE session_id = ? ORDER BY seq ASC")
+    .all(sessionId) as Record<string, unknown>[];
+  return rows.map(rowToAttempt);
+}
+
+export function loadRecentAttempts(opts: { task_type: string; project?: string | null; limit?: number; minConfidence?: number }): Attempt[] {
+  const db = getDb();
+  const limit = opts.limit ?? 10;
+  const minConfidence = opts.minConfidence ?? 0.2;
+  const project = opts.project ?? null;
+  const rows = db
+    .prepareCached(
+      `SELECT sa.* FROM session_attempts sa
+       JOIN sessions s ON s.id = sa.session_id
+       WHERE s.task_type = ?
+         AND (s.project = ? OR s.project IS NULL)
+         AND sa.outcome IN ('rejected', 'partial')
+         AND sa.confidence >= ?
+       ORDER BY sa.confidence DESC, sa.created_at DESC
+       LIMIT ?`
+    )
+    .all(opts.task_type, project, minConfidence, limit) as Record<string, unknown>[];
+  return rows.map(rowToAttempt);
+}
+
+const ATTEMPT_DECAY_RATE = 0.002;
+
+export function decayAttempts(): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts SET confidence = MAX(0, confidence - ?) WHERE outcome IN ('rejected','partial','promising')`
+  ).run(ATTEMPT_DECAY_RATE);
+}
+
+export function boostAttempt(sessionId: string, seq: number, delta: number): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts
+     SET confidence = MIN(1, confidence + ?), access_count = access_count + 1, last_accessed_at = datetime('now')
+     WHERE session_id = ? AND seq = ?`
+  ).run(delta, sessionId, seq);
+}
+
+export function penalizeAttempt(sessionId: string, seq: number, delta: number): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts
+     SET confidence = MAX(0, confidence - ?), access_count = access_count + 1, last_accessed_at = datetime('now')
+     WHERE session_id = ? AND seq = ?`
+  ).run(delta, sessionId, seq);
+}
+
+function rowToSuggestion(row: Record<string, unknown>): ImprovementSuggestion {
+  return {
+    id: row.id as number,
+    session_id: (row.session_id as string) ?? null,
+    suggestion: row.suggestion as string,
+    status: row.status as SuggestionStatus,
+    created_at: (row.created_at as string) ?? new Date().toISOString(),
+    resolved_at: (row.resolved_at as string) ?? null,
+  };
+}
+
+export function saveImprovementSuggestion(sessionId: string, suggestion: string): number {
+  const db = getDb();
+  const result = db.prepareCached(
+    "INSERT INTO improvement_suggestions (session_id, suggestion, status) VALUES (?, ?, 'offered')"
+  ).run(sessionId, suggestion);
+  return Number(result.lastInsertRowid);
+}
+
+export function getSuggestion(id: number): ImprovementSuggestion | null {
+  const db = getDb();
+  const row = db.prepareCached("SELECT * FROM improvement_suggestions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? rowToSuggestion(row) : null;
+}
+
+export function loadPendingSuggestions(limit = 3): ImprovementSuggestion[] {
+  const db = getDb();
+  const rows = db
+    .prepareCached("SELECT * FROM improvement_suggestions WHERE status = 'offered' ORDER BY created_at DESC, id DESC LIMIT ?")
+    .all(limit) as Record<string, unknown>[];
+  return rows.map(rowToSuggestion);
+}
+
+export function updateSuggestionStatus(id: number, status: SuggestionStatus): void {
+  const db = getDb();
+  const resolvedAt = status === "offered" ? null : new Date().toISOString();
+  db.prepareCached("UPDATE improvement_suggestions SET status = ?, resolved_at = ? WHERE id = ?").run(status, resolvedAt, id);
 }

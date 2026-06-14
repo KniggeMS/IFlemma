@@ -1,6 +1,7 @@
 import os from "os";
 import path from "path";
 import fs from "fs";
+import { redactSecrets } from "../memory/privacy.js";
 
 const TRAFFIC_DIR = path.join(os.homedir(), ".lemma", "traffic");
 const MAX_TRAFFIC_FILES = 3;
@@ -26,6 +27,15 @@ function getFilePath(): string {
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
   return str.substring(0, max) + `... [truncated, total ${str.length} chars]`;
+}
+
+// Redact secrets across the FULL string first, then truncate the redacted result.
+// This ordering guarantees a secret near the truncation boundary is always masked,
+// and [REDACTED:...] placeholders count toward the length budget. `found` is
+// discarded because its .match field holds the raw secret — never persist it.
+function safeStringify(value: unknown): string {
+  const json = JSON.stringify(value);
+  return truncate(redactSecrets(json).redacted, MAX_BODY_LENGTH);
 }
 
 function rotate(): void {
@@ -77,14 +87,14 @@ export function logIncoming(raw: unknown): void {
       const params = msg.params as Record<string, unknown>;
       body = {
         name: params?.name,
-        arguments: truncate(JSON.stringify(params?.arguments ?? {}), MAX_BODY_LENGTH),
+        arguments: safeStringify(params?.arguments ?? {}),
       };
     } else if (method === "resources/read") {
-      body = { uri: (msg.params as Record<string, unknown>)?.uri };
+      body = { uri: redactSecrets(String((msg.params as Record<string, unknown>)?.uri ?? "")).redacted };
     } else if (method === "tools/list" || method === "resources/list" || method === "prompts/list") {
       body = null;
     } else {
-      body = truncate(JSON.stringify(msg.params ?? {}), MAX_BODY_LENGTH);
+      body = safeStringify(msg.params ?? {});
     }
 
     writeEntry({ ts: new Date().toISOString(), dir: "IN", method, id, body });
@@ -165,7 +175,7 @@ export function logOutgoing(raw: unknown): void {
       const content = result.content as Array<Record<string, unknown>>;
       const text = content
         .filter(c => c.type === "text")
-        .map(c => truncate(String(c.text ?? ""), 2000))
+        .map(c => truncate(redactSecrets(String(c.text ?? "")).redacted, 2000))
         .join("\n");
       writeEntry({
         ts: new Date().toISOString(),

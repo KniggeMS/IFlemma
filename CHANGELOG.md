@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.14.0] - 2026-06-14
+
+### Added
+- **Reasoning continuity spec coverage** — three-layer recall (dead ends → lessons → warnings, spec §5.2), warning-fragment fallback for repeated dead ends with no guide (§5.3), and the accept→boost leg of the self-critique loop mirroring dismiss→penalize (§5.4). `memory_read` query results are now project-scoped and tracked into the active session's `memories_read`; `session_start` passes existing guides to `suggestGuides` so DB-only guides surface as tracked.
+
+### Fixed
+- **Single decay source** — `applySessionDecay` no longer runs an in-memory `decayConfidence` pass alongside the DB `decayMemories` pass; injected confidence can no longer diverge from persisted confidence across calls.
+- **Project key canonicalization** — project is normalized (trimmed + lowercased) on every write (`addMemory`, `updateMemory`) and `getMemoryStats` filters `lower(project) = ?`; `detectProject()` also normalizes so `memories.project` and `sessions.project` cannot diverge by case (which would silently break recall).
+- **Server version drift** — MCP `serverInfo.version` was hardcoded `1.0.0`; now read from `package.json` via `src/version.ts`.
+- **Visualizer security** — binds `127.0.0.1` (not `0.0.0.0`), requires an `X-Lemma-Token`, and narrows CORS to the localhost origin allow-list.
+- **Traffic-log secret redaction** — tool-call arguments and responses are passed through `redactSecrets` before being written to disk.
+- **Position-based secret redaction** — `redactSecrets` uses a single left-to-right overlap pass so `sk-proj-…` no longer over-reports, and independent words matching a secret value are no longer masked.
+
+### Changed
+- **Semantic search documentation** — TF-IDF cosine similarity is now documented as the official approach; the `vec0` `memory_vectors` table and `searchByVector` are marked reserved for a possible v0.14 embedding pipeline (spec §5.3).
+
+## [0.13.0] - 2026-06-13
+
+### Added
+- **Reasoning continuity (dead-end recall)** — `session_start` recalls recent rejected/partial attempts within `token_budget.continuity` and boosts promising ones, so the model does not repeat dead ends across sessions.
+- **Repeated dead-end distillation** — TF-IDF-verified distillation of repeated failed approaches into guide pitfalls (no false positives), with a 24h self-maintaining decay of prior reasoning attempts.
+- **Self-critique loop** — `session_attempt` tool (25th) captures reasoning attempts and activates `self_critique_count`; `suggestion_respond` tool (26th) closes the dismiss→penalize leg.
+- **Persistent improvement suggestions** — low-success suggestions are persisted and surfaced at `session_start` (offered, never enforced), with deterministic ordering and re-offer semantics.
+- **SCHEMA_V2** — `session_attempts` and `improvement_suggestions` tables with back-compat migration tests.
+- MCP smoke integration test asserting tool count and the continuity flow.
+
+### Fixed
+- `session_attempt` `recordAttempt` wrapped in try/catch (best-effort, never throws).
+- Honest outcome casting, redacted echo, invalid-enum tests.
+
+## [0.12.0] - 2026-06-13
+
+### Added
+- **Self-contained system prompt** — `src/server/prompt-content.ts` ships the full instructions template and per-tool behavioral nudges; `buildInstructions` returns real teaching content with no external pointer.
+- Behavioral nudges appended to tool descriptions.
+
+### Changed
+- `BASE_SYSTEM_PROMPT` is now self-contained (no AGENTS.md pointer).
+
+### Removed
+- **Stopped writing AGENTS.md.** Lemma no longer injects memory content into AGENTS.md files; stale Lemma blocks are auto-cleaned on startup. Memory injection now flows through the MCP prompt layer only.
+
 ## [0.11.5] - 2026-05-11
 
 ### Added

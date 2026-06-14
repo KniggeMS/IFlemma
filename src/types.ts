@@ -76,8 +76,37 @@ export interface Session {
   final_approach: string | null;
   approach_changed: boolean;
   lessons: string[];
+  attempts?: Attempt[];
   status: "active" | "completed" | "abandoned";
   completed_at?: string;
+  project: string | null;
+}
+
+export type AttemptOutcome = "rejected" | "partial" | "promising";
+
+export interface Attempt {
+  session_id: string;
+  seq: number;
+  approach: string;
+  rationale: string | null;
+  outcome: AttemptOutcome;
+  critique: string | null;
+  related_memory_id: number | null;
+  confidence: number;
+  last_accessed_at: string | null;
+  access_count: number;
+  created_at: string;
+}
+
+export type SuggestionStatus = "offered" | "accepted" | "dismissed";
+
+export interface ImprovementSuggestion {
+  id: number;
+  session_id: string | null;
+  suggestion: string;
+  status: SuggestionStatus;
+  created_at: string;
+  resolved_at: string | null;
 }
 
 export interface VirtualSession {
@@ -145,6 +174,7 @@ export interface LemmaConfig {
     summary_index: number;
     guides_detail: number;
     instructions: number;
+    continuity: number;
   };
   injection: {
     max_full_content_fragments: number;

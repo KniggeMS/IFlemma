@@ -12,6 +12,7 @@ const DEFAULT_CONFIG: LemmaConfig = {
     summary_index: 1000,
     guides_detail: 1000,
     instructions: 1500,
+    continuity: 800,
   },
   injection: {
     max_full_content_fragments: 15,

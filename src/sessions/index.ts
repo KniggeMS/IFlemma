@@ -11,5 +11,15 @@ export {
   getRecentSessions,
   getSessionsByTechnology,
   calculateSuccessRate,
-  formatSessionDetail
+  formatSessionDetail,
+  recordAttempt,
+  loadAttemptsForSession,
+  loadRecentAttempts,
+  decayAttempts,
+  boostAttempt,
+  penalizeAttempt,
+  saveImprovementSuggestion,
+  getSuggestion,
+  loadPendingSuggestions,
+  updateSuggestionStatus,
 } from "./core.js";

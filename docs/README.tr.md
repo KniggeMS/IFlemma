@@ -6,7 +6,7 @@
 
 [English](../README.md) | [Türkçe](README.tr.md)
 
-Lemma, LLM'lere oturumlar arası kalıcı bellek sağlayan bir MCP sunucusudur. Bellekler her oturuma otomatik enjekte edilir — araç çağrısına gerek yoktur. Bilgi kullanım yoluyla evrilir: sık erişilenler güçlenir, kullanılmayanlar solar, örüntüler yeniden kullanılabilir yeteneklere dönüştürülür. Arka planda otonom bir zeka katmanı çalışır — çelişkileri tespit eder, eylem önerileri sunar ve ilgili bilgileri otomatik bağlar.
+Lemma, LLM'lere oturumlar arası kalıcı bellek sağlayan bir MCP sunucusudur. Bellekler her oturuma otomatik enjekte edilir — araç çağrısına gerek yoktur. Bilgi kullanım yoluyla evrilir: sık erişilenler güçlenir, kullanılmayanlar solar, örüntüler yeniden kullanılabilir yeteklere dönüştürülür. Arka planda otonom bir zeka katmanı çalışır — çelişkileri tespit eder, eylem önerileri sunar ve ilgili bilgileri otomatik bağlar. **Mantık sürekliliği** denenen/reddedilen yaklaşımları kaydeder ve her yeni oturumun başında çıkmaz sokakları (dead-end) hatırlatır, böylece aynı başarısız yol iki kez denenmez.
 
 ## Hızlı Başlangıç
 
@@ -65,9 +65,9 @@ Lemma arka planda zeka çalıştırır — manuel tetiklemeye gerek yoktur:
 
 Manuel derin analiz de özel araçlarla kullanılabilir.
 
-## Araçlar (24)
+## Araçlar (26)
 
-### Bellek (11)
+### Bellek (10)
 
 | Araç | Açıklama |
 |------|----------|
@@ -82,7 +82,7 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `memory_audit` | Bütünlük kontrolü (yetim, tekrar, anomali) |
 | `memory_library` | Tüm bilgi tabanının analiz sinyalleri ve önerilerle tam anlık görüntüsü |
 
-### Rehberler (8)
+### Rehberler (7)
 
 | Araç | Açıklama |
 |------|----------|
@@ -94,13 +94,15 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `guide_forget` | Rehber sil |
 | `guide_merge` | Rehberleri birleştir, kaynak bellekleri aktar |
 
-### Oturumlar (3)
+### Oturumlar (5)
 
 | Araç | Açıklama |
 |------|----------|
 | `session_start` | İzlenen oturum başlat, ilgili bağlamı önceden yükle |
+| `session_attempt` | Denenen bir yaklaşımı kaydet (reddedilen/kısmi/umut verici) — çıkmaz sokaklar değerli bellektir |
 | `session_end` | İnceleme, otomatik bağlama ve önerilerle oturumu sonlandır |
 | `session_stats` | Sanal oturum istatistikleri |
+| `suggestion_respond` | Sunulan iyileştirme önerisini kabul et veya reddet (Lemma tercihlerini öğrenir) |
 
 ### Zeka (4)
 

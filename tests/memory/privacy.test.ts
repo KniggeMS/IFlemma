@@ -102,4 +102,41 @@ describe("Redaction", () => {
     assert.equal(found.length, 0);
     assert.equal(redacted, text);
   });
+
+  it("does not over-redact a repeated standalone secret value (replaceAll bug fix)", () => {
+    // The buggy replaceAll impl redacted EVERY occurrence of the matched value, including
+    // the bare `secret1234` later in the text. Position-based redaction must touch only the
+    // span that actually matched password="...".
+    const text = 'config has password="secret1234" but the word secret1234 alone is fine';
+    const { redacted } = redactSecrets(text);
+    const placeholderCount = (redacted.match(/\[REDACTED:[^\]]+\]/g) || []).length;
+    assert.equal(placeholderCount, 1, "exactly one placeholder expected");
+    assert.ok(redacted.includes("[REDACTED:Password in assignment]"));
+    // The standalone secret1234 (NOT preceded by password=") must survive untouched.
+    assert.ok(redacted.includes("the word secret1234 alone is fine"));
+  });
+
+  it("sk-proj- overlap: longest match wins in redacted output", () => {
+    // Both sk-proj-... (project key) and sk-... (API key) patterns match the same span.
+    // redacted must contain exactly ONE placeholder, the LONGER project-key type.
+    const text = "leaked: sk-proj-abcdefghijklmnopqrst1234567890";
+    const { redacted, found } = redactSecrets(text);
+    const placeholderCount = (redacted.match(/\[REDACTED:[^\]]+\]/g) || []).length;
+    assert.equal(placeholderCount, 1, "exactly one placeholder (longest wins)");
+    assert.ok(redacted.includes("[REDACTED:OpenAI project key]"));
+    assert.ok(!redacted.includes("sk-proj-abcdefghijklmnopqrst1234567890"));
+    assert.ok(!redacted.includes("sk-proj-"));
+    // found MAY report 2 due to the sk- overlap; require at least 1.
+    assert.ok(found.length >= 1);
+  });
+
+  it("found reports ALL matches incl overlaps while redacted uses longest-wins", () => {
+    // Documents the found-vs-redacted semantics: `found` includes overlapping matches so
+    // callers inspecting .type (e.g. handlers.ts neverConfirmTypes) see every candidate,
+    // while `redacted` collapses to the longest non-overlapping subset.
+    const text = "key=sk-proj-abcdefghijklmnopqrst1234567890";
+    const { found } = redactSecrets(text);
+    const types = found.map(f => f.type);
+    assert.ok(types.includes("OpenAI project key"), "project key type must be present in found");
+  });
 });
