@@ -1,7 +1,8 @@
-interface SecretMatch {
+export interface SecretMatch {
   pattern: string;
   match: string;
   type: string;
+  index: number;
 }
 
 const SECRET_PATTERNS: Array<{ pattern: RegExp; type: string }> = [
@@ -30,7 +31,7 @@ export function scanForSecrets(text: string): SecretMatch[] {
     const re = new RegExp(pattern.source, pattern.flags);
     let match;
     while ((match = re.exec(text)) !== null) {
-      matches.push({ pattern: pattern.source, match: match[0], type });
+      matches.push({ pattern: pattern.source, match: match[0], type, index: match.index });
     }
   }
   return matches;
@@ -38,9 +39,22 @@ export function scanForSecrets(text: string): SecretMatch[] {
 
 export function redactSecrets(text: string): { redacted: string; found: SecretMatch[] } {
   const found = scanForSecrets(text);
-  let redacted = text;
-  for (const m of found) {
-    redacted = redacted.replaceAll(m.match, `[REDACTED:${m.type}]`);
+  if (found.length === 0) return { redacted: text, found };
+
+  // Redact in a single left-to-right pass. Sort by (index ASC, length DESC) so at each
+  // position the LONGEST match wins (e.g. sk-proj-... beats the shorter sk-... overlap).
+  // Skip any match that starts inside a previously-accepted span. `found` still reports ALL
+  // matches (callers like handlers.ts neverConfirmTypes inspect .type), while `redacted`
+  // uses only the non-overlapping subset.
+  const order = [...found].sort((a, b) => a.index - b.index || b.match.length - a.match.length);
+  let result = "";
+  let cursor = 0;
+  for (const m of order) {
+    if (m.index < cursor) continue;
+    result += text.slice(cursor, m.index);
+    result += `[REDACTED:${m.type}]`;
+    cursor = m.index + m.match.length;
   }
-  return { redacted, found };
+  result += text.slice(cursor);
+  return { redacted: result, found };
 }

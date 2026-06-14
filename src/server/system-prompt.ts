@@ -4,7 +4,7 @@ import * as core from "../memory/index.js";
 import * as guides from "../guides/index.js";
 import { applyPromptModifiers } from "./hooks.js";
 import * as core_config from "../memory/config.js";
-import { scanForSecrets } from "../memory/privacy.js";
+import { redactSecrets } from "../memory/privacy.js";
 import { TOOLS } from "./tools.js";
 import { INSTRUCTIONS_TEMPLATE, TOOL_NUDGES } from "./prompt-content.js";
 import { logger } from "../logger.js";
@@ -267,12 +267,7 @@ export async function buildInjectedTools(projectName: string | null): Promise<To
 
     for (const f of fullContentFrags) {
       let fragmentText = f.fragment;
-      const secrets = scanForSecrets(fragmentText);
-      if (secrets.length > 0) {
-        for (const s of secrets) {
-          fragmentText = fragmentText.replaceAll(s.match, `[REDACTED:${s.type}]`);
-        }
-      }
+      fragmentText = redactSecrets(fragmentText).redacted;
       const entry = `[${f.id}] ${f.title} (${f.confidence.toFixed(2)}, ${f.source})\n${fragmentText}\n\n`;
       const entryTokens = core_config.estimateTokens(entry);
       if (fullTokenBudget - entryTokens < 0) break;

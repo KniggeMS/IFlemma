@@ -1,6 +1,7 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { exec } from "child_process";
 import { fileURLToPath } from "url";
 import { initDatabase, getDb } from "../db/index.js";
@@ -10,6 +11,32 @@ import { logger } from "../logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = path.join(__dirname, "visualizer.html");
 const DEFAULT_PORT = 3456;
+
+// CORS allow-list: populated by startVisualizeServer once the bound port is known.
+// Kept at module scope so the module-level helpers (jsonResponse, OPTIONS preflight)
+// can call corsOrigin without depending on server-local state.
+let allowedOrigins: string[] = [];
+
+function corsOrigin(req: http.IncomingMessage): string | undefined {
+  const o = req.headers.origin;
+  return o && allowedOrigins.includes(o) ? o : undefined;
+}
+
+/**
+ * Verify the per-startup token on an incoming request. Accepts either the
+ * `x-lemma-token` header (used by the SPA's fetch calls) or a `?token=` query
+ * parameter (used by `window.open('/api/export', ...)`, which cannot set custom
+ * headers). Pure / DB-free so it can be unit tested in isolation.
+ */
+export function verifyToken(
+  req: http.IncomingMessage,
+  url: URL,
+  token: string,
+): boolean {
+  if (req.headers["x-lemma-token"] === token) return true;
+  const q = url.searchParams.get("token");
+  return q === token;
+}
 
 function getHTML(): string {
   return fs.readFileSync(HTML_PATH, "utf-8");
@@ -24,11 +51,15 @@ function parseBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function jsonResponse(res: http.ServerResponse, data: unknown, status = 200): void {
-  const headers: http.OutgoingHttpHeaders = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-  };
+function jsonResponse(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  data: unknown,
+  status = 200,
+): void {
+  const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json" };
+  const origin = corsOrigin(req);
+  if (origin) headers["Access-Control-Allow-Origin"] = origin;
   res.writeHead(status, headers);
   res.end(JSON.stringify(data));
 }
@@ -62,15 +93,18 @@ async function handleRequest(
   res: http.ServerResponse,
   db: ReturnType<typeof getDb>,
   html: string,
+  token: string,
 ): Promise<void> {
   const url = new URL(req.url || "/", `http://localhost`);
 
   if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+    const h: http.OutgoingHttpHeaders = {
       "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    });
+      "Access-Control-Allow-Headers": "Content-Type, X-Lemma-Token",
+    };
+    const origin = corsOrigin(req);
+    if (origin) h["Access-Control-Allow-Origin"] = origin;
+    res.writeHead(204, h);
     res.end();
     return;
   }
@@ -82,13 +116,22 @@ async function handleRequest(
   }
 
   if (url.pathname === "/api/health") {
-    jsonResponse(res, { status: "ok" });
+    jsonResponse(req, res, { status: "ok" });
     return;
+  }
+
+  // All /api/* endpoints require the startup token (header), except /api/export which
+  // also accepts ?token= (window.open cannot send custom headers).
+  if (url.pathname.startsWith("/api/") && url.pathname !== "/api/export") {
+    if (!verifyToken(req, url, token)) {
+      jsonResponse(req, res, { error: "Unauthorized" }, 401);
+      return;
+    }
   }
 
   if (url.pathname === "/api/data" && req.method === "GET") {
     const fragments = memoryStore.searchMemories(db, "", { all: true, topK: 100000 });
-    jsonResponse(res, fragments);
+    jsonResponse(req, res, fragments);
     return;
   }
 
@@ -102,7 +145,7 @@ async function handleRequest(
         "SELECT DISTINCT COALESCE(project, '(global)') as p FROM memories"
       ).all() as { p: string }[]
     ).map((r) => r.p);
-    jsonResponse(res, {
+    jsonResponse(req, res, {
       total: stats.total,
       projects,
       relations: relationCount,
@@ -121,14 +164,14 @@ async function handleRequest(
     if (body.type !== undefined) updates.type = body.type;
     if (body.project !== undefined) updates.project = body.project || null;
     const ok = memoryStore.updateMemory(db, legacyId, updates);
-    jsonResponse(res, ok ? { ok: true } : { ok: false, error: "Not found" }, ok ? 200 : 404);
+    jsonResponse(req, res, ok ? { ok: true } : { ok: false, error: "Not found" }, ok ? 200 : 404);
     return;
   }
 
   if (url.pathname.startsWith("/api/fragments/") && req.method === "DELETE") {
     const legacyId = decodeURIComponent(url.pathname.replace("/api/fragments/", ""));
     const ok = memoryStore.deleteMemory(db, legacyId);
-    jsonResponse(res, ok ? { ok: true } : { ok: false, error: "Not found" }, ok ? 200 : 404);
+    jsonResponse(req, res, ok ? { ok: true } : { ok: false, error: "Not found" }, ok ? 200 : 404);
     return;
   }
 
@@ -142,12 +185,12 @@ async function handleRequest(
     const targetId = resolveNumericId(db, targetLegacy);
 
     if (!sourceId || !targetId) {
-      jsonResponse(res, { ok: false, error: "Source or target not found" }, 404);
+      jsonResponse(req, res, { ok: false, error: "Source or target not found" }, 404);
       return;
     }
 
     const ok = memoryStore.addRelation(db, sourceId, targetId, type, body.note);
-    jsonResponse(res, ok ? { ok: true } : { ok: false, error: "Failed" });
+    jsonResponse(req, res, ok ? { ok: true } : { ok: false, error: "Failed" });
     return;
   }
 
@@ -161,7 +204,7 @@ async function handleRequest(
     const targetId = resolveNumericId(db, targetLegacy);
 
     if (!sourceId || !targetId) {
-      jsonResponse(res, { ok: false, error: "Not found" }, 404);
+      jsonResponse(req, res, { ok: false, error: "Not found" }, 404);
       return;
     }
 
@@ -178,11 +221,17 @@ async function handleRequest(
       .run(targetId, sourceId);
 
     const deleted = result.changes + reverseResult.changes;
-    jsonResponse(res, { ok: deleted > 0, deleted });
+    jsonResponse(req, res, { ok: deleted > 0, deleted });
     return;
   }
 
   if (url.pathname === "/api/export" && req.method === "GET") {
+    // Export is triggered via window.open() which cannot set custom headers,
+    // so accept the token via query param in addition to the header.
+    if (req.headers["x-lemma-token"] !== token && url.searchParams.get("token") !== token) {
+      jsonResponse(req, res, { error: "Unauthorized" }, 401);
+      return;
+    }
     const fragments = memoryStore.searchMemories(db, "", { all: true, topK: 100000 });
     const lines = fragments.map((f) => JSON.stringify(f)).join("\n");
     res.writeHead(200, {
@@ -193,7 +242,7 @@ async function handleRequest(
     return;
   }
 
-  jsonResponse(res, { error: "Not found" }, 404);
+  jsonResponse(req, res, { error: "Not found" }, 404);
 }
 
 export function startVisualizeServer(portArg?: number): Promise<void> {
@@ -201,12 +250,19 @@ export function startVisualizeServer(portArg?: number): Promise<void> {
   const db = getDb();
   const html = getHTML();
   const port = portArg || DEFAULT_PORT;
+  allowedOrigins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
+
+  // Per-startup token: injected into the served HTML so the SPA can read it from
+  // a <meta> tag and send it back as the X-Lemma-Token header on every API call.
+  // Not persisted, not logged — valid only for this process lifetime.
+  const token = crypto.randomUUID();
+  const safeHtml = html.replace("__LEMMA_TOKEN__", token);
 
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
-      handleRequest(req, res, db, html).catch((err) => {
+      handleRequest(req, res, db, safeHtml, token).catch((err) => {
         logger.error("Visualizer request error", (err as Error).message);
-        jsonResponse(res, { error: "Internal server error" }, 500);
+        jsonResponse(req, res, { error: "Internal server error" }, 500);
       });
     });
 
@@ -221,7 +277,7 @@ export function startVisualizeServer(portArg?: number): Promise<void> {
       }
     });
 
-    server.listen(port, () => {
+    server.listen(port, "127.0.0.1", () => {
       const url = `http://localhost:${port}`;
       console.error(``);
       console.error(`  ┌──────────────────────────────────────────┐`);
