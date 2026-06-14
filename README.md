@@ -79,7 +79,7 @@ Manual deep analysis is also available via dedicated tools.
 
 ## Tools (26)
 
-### Memory (11)
+### Memory (10)
 
 | Tool | Purpose |
 |------|---------|
@@ -94,7 +94,7 @@ Manual deep analysis is also available via dedicated tools.
 | `memory_audit` | Integrity check for orphans, duplicates, anomalies |
 | `memory_library` | Full knowledge base snapshot with analysis signals and suggestions |
 
-### Guides (8)
+### Guides (7)
 
 | Tool | Purpose |
 |------|---------|

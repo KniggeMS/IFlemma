@@ -67,7 +67,7 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 
 ## Araçlar (26)
 
-### Bellek (11)
+### Bellek (10)
 
 | Araç | Açıklama |
 |------|----------|
@@ -82,7 +82,7 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `memory_audit` | Bütünlük kontrolü (yetim, tekrar, anomali) |
 | `memory_library` | Tüm bilgi tabanının analiz sinyalleri ve önerilerle tam anlık görüntüsü |
 
-### Rehberler (8)
+### Rehberler (7)
 
 | Araç | Açıklama |
 |------|----------|
