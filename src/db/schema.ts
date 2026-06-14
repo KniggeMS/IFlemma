@@ -68,6 +68,10 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
   VALUES (new.id, new.title, new.fragment, new.description);
 END;
 
+-- RESERVED for v0.14: this vec0 table is scaffolding for a possible embedding
+-- pipeline. As of v0.13 nothing writes here (addMemory does not INSERT), so it
+-- stays empty and searchByVector() returns []. Live semantic search is TF-IDF
+-- (src/intelligence/semantic.ts). See spec §5.3.
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
   embedding float[384]
 );

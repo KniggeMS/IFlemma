@@ -420,6 +420,15 @@ export function searchMemories(
   });
 }
 
+/**
+ * RESERVED for v0.14 — currently dead code.
+ *
+ * Querying the `memory_vectors` (vec0) table is meaningless today because
+ * nothing populates it: addMemory() never INSERTs an embedding, so this always
+ * returns []. Kept (and exported) so a future embedding pipeline can light it
+ * up without changing the query API. Live semantic retrieval is TF-IDF — see
+ * src/intelligence/semantic.ts semanticSearch(). Tracked in spec §5.3.
+ */
 export function searchByVector(
   lemmaDb: LemmaDB,
   embedding: Float32Array,
