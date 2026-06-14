@@ -4,8 +4,9 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-import { handleSessionStart, handleSessionEnd, handleSessionAttempt, handleGuidePractice, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
+import { handleSessionStart, handleSessionEnd, handleSessionAttempt, handleGuidePractice, handleMemoryAdd, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
 import { setSessionsDir, loadAttemptsForSession } from "../../src/sessions/index.js";
+import { setMemoryDir } from "../../src/memory/index.js";
 import { loadConfig } from "../../src/memory/config.js";
 import { getDb } from "../../src/db/database.js";
 
@@ -14,12 +15,14 @@ let TMPDIR: string;
 beforeEach(() => {
   TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), "lemma-continuity-test-"));
   setSessionsDir(TMPDIR);
+  setMemoryDir(TMPDIR);
   setNotifyChange(() => {});
   resetSessionState();
 });
 
 afterEach(() => {
   setSessionsDir(path.join(os.homedir(), ".lemma"));
+  setMemoryDir(path.join(os.homedir(), ".lemma"));
   fs.rmSync(TMPDIR, { recursive: true, force: true });
 });
 
@@ -132,6 +135,37 @@ describe("session_start continuity recall", () => {
     // caps recall, so the continuity block truncates rather than dumping the whole blob.
     assert.doesNotMatch(text, /x{4000}/, "the oversized approach must be truncated out of recall");
     assert.ok(budget > 0);
+  });
+
+  test("recall surfaces lessons from completed similar sessions (§5.2 layer 2)", async () => {
+    // Session A completed with an explicit lesson.
+    await handleSessionStart({ task_type: "refactoring", technologies: ["react"] });
+    await handleSessionEnd({ outcome: "success", lessons: ["extract custom hook for shared derived state"] });
+
+    // Session B, same task_type: the lesson must surface under the lessons block.
+    const startB = await handleSessionStart({ task_type: "refactoring", technologies: ["react"] });
+    const text = startB.content[0].text;
+    assert.match(text, /What worked/i);
+    assert.match(text, /lessons/i);
+    assert.match(text, /extract custom hook for shared derived state/i);
+  });
+
+  test("recall surfaces warning fragments for the project (§5.2 layer 3)", async () => {
+    // No dead ends, no lessons — only a warning fragment in this project.
+    await handleMemoryAdd({ fragment: "Never commit API keys to the public repo", type: "warning", project: "warn-proj-1" });
+
+    const start = await handleSessionStart({ task_type: "deployment", project: "warn-proj-1" });
+    const text = start.content[0].text;
+    assert.match(text, /Warnings/i);
+    assert.match(text, /Never commit API keys/i);
+  });
+
+  test("recall does NOT surface another project's warnings (project-scoped)", async () => {
+    await handleMemoryAdd({ fragment: "warn-other-project-only-marker", type: "warning", project: "warn-proj-other" });
+    const start = await handleSessionStart({ task_type: "deployment", project: "warn-proj-isolated" });
+    // No dead ends/lessons/warnings for this project → no continuity block at all.
+    assert.doesNotMatch(start.content[0].text, /warn-other-project-only-marker/);
+    assert.doesNotMatch(start.content[0].text, /Prior reasoning on similar/);
   });
 });
 

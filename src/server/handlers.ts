@@ -261,29 +261,99 @@ function notifyMemoryChange(): void {
 }
 
 function buildContinuityRecall(taskType: string, project: string | null = null): string {
-  const recent = sessions.loadRecentAttempts({ task_type: taskType, project, limit: 15, minConfidence: 0.2 });
-  if (recent.length === 0) return "";
-
   const budget = loadConfig().token_budget.continuity;
-  const header = `\n\n## Prior reasoning on similar ${taskType} tasks`;
-  const subheader = "\n### Dead ends (don't repeat)";
-  // Account for both the header and subheader so the budget is honest from the start.
-  let used = estimateTokens(header) + estimateTokens(subheader);
 
-  let block = header + subheader;
-  // loadRecentAttempts already filters to rejected/partial; this re-filter is a defensive guard.
+  // Layer 1 — dead ends (rejected/partial attempts from similar prior sessions).
+  const recent = sessions.loadRecentAttempts({ task_type: taskType, project, limit: 15, minConfidence: 0.2 });
   const deadEnds = recent.filter(a => a.outcome === "rejected" || a.outcome === "partial");
-  for (const a of deadEnds) {
-    const line = `\n- Tried: ${a.approach}. Rejected because: ${a.critique ?? "unknown"}`;
-    if (used + estimateTokens(line) > budget) break; // never truncate mid-item; stop adding
-    block += line;
-    used += estimateTokens(line);
+
+  // Layer 2 — lessons captured at the end of completed similar sessions.
+  const lessons: string[] = [];
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT s.lessons FROM sessions s
+       WHERE s.status = 'completed' AND s.task_type = ? AND s.lessons IS NOT NULL
+         AND (s.project = ? OR s.project IS NULL)
+       ORDER BY s.ended_at DESC LIMIT 5`
+    ).all(taskType, project) as { lessons: string | null }[];
+    for (const r of rows) {
+      if (!r.lessons) continue;
+      try {
+        const parsed = JSON.parse(r.lessons) as unknown;
+        if (Array.isArray(parsed)) for (const l of parsed) if (typeof l === "string" && l.trim()) lessons.push(l.trim());
+      } catch { /* malformed JSON — skip this session's lessons */ }
+    }
+  } catch (err) {
+    logger.warn("continuity_recall lessons_load_failed", { error: String(err) });
   }
 
-  // Boost recalled attempts (they are relevant again) — best-effort; never break session_start.
-  // Attempt.session_id is populated by rowToAttempt (Task 3) and the SELECT includes sa.*.
-  for (const a of deadEnds) {
-    try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { logger.debug("continuity_recall", "boost_failed"); }
+  // Layer 3 — warning fragments recorded for this project (or global).
+  const warnings: { title: string | null; fragment: string }[] = [];
+  try {
+    const db = getDb();
+    const rows = db.prepareCached(
+      `SELECT title, fragment FROM memories
+       WHERE type = 'warning' AND (project = ? OR project IS NULL)
+       ORDER BY confidence DESC, access_count DESC LIMIT 5`
+    ).all(project) as { title: string | null; fragment: string }[];
+    warnings.push(...rows);
+  } catch (err) {
+    logger.warn("continuity_recall warnings_load_failed", { error: String(err) });
+  }
+
+  if (deadEnds.length === 0 && lessons.length === 0 && warnings.length === 0) return "";
+
+  const header = `\n\n## Prior reasoning on similar ${taskType} tasks`;
+  let used = estimateTokens(header);
+  let block = header;
+
+  // Dead ends (highest priority).
+  if (deadEnds.length > 0) {
+    const sub = "\n### Dead ends (don't repeat)";
+    block += sub;
+    used += estimateTokens(sub);
+    for (const a of deadEnds) {
+      const line = `\n- Tried: ${a.approach}. Rejected because: ${a.critique ?? "unknown"}`;
+      if (used + estimateTokens(line) > budget) break; // never truncate mid-item; stop adding
+      block += line;
+      used += estimateTokens(line);
+    }
+    // Boost recalled attempts (they are relevant again) — best-effort; never break session_start.
+    for (const a of deadEnds) {
+      try { sessions.boostAttempt(a.session_id, a.seq, 0.015); } catch { logger.debug("continuity_recall", "boost_failed"); }
+    }
+  }
+
+  // Lessons (second priority).
+  if (lessons.length > 0) {
+    const sub = "\n### What worked / lessons";
+    if (used + estimateTokens(sub) <= budget) {
+      block += sub;
+      used += estimateTokens(sub);
+      for (const l of lessons) {
+        const line = `\n- ${l}`;
+        if (used + estimateTokens(line) > budget) break;
+        block += line;
+        used += estimateTokens(line);
+      }
+    }
+  }
+
+  // Warnings (third priority).
+  if (warnings.length > 0) {
+    const sub = "\n### Warnings";
+    if (used + estimateTokens(sub) <= budget) {
+      block += sub;
+      used += estimateTokens(sub);
+      for (const w of warnings) {
+        const text = (w.title && w.title.trim()) || (w.fragment.length > 120 ? w.fragment.slice(0, 120) + "…" : w.fragment);
+        const line = `\n- ${text}`;
+        if (used + estimateTokens(line) > budget) break;
+        block += line;
+        used += estimateTokens(line);
+      }
+    }
   }
 
   return block;
