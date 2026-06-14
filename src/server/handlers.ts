@@ -394,9 +394,18 @@ function distillRepeatedDeadEnds(session: Session): string[] {
 
     // Distill into the most recently practiced guide for this session, if any.
     const guideName = session.guides_used?.[session.guides_used.length - 1];
-    if (!guideName) continue;
-    const guide = guides.getGuideFromDb(guideName);
-    if (!guide) continue;
+    const guide = guideName ? guides.getGuideFromDb(guideName) : null;
+    if (!guide) {
+      // No guide to distill into — record a warning fragment so the repeated dead end
+      // still surfaces in future recall (spec §5.3: guide-missing → warning fragment).
+      try {
+        const warningText = `Repeated dead end on ${session.task_type}: "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
+        store.addMemory(guideDb, warningText, "ai", `Repeated dead end: ${session.task_type}`, session.project, undefined, "warning");
+      } catch (err) {
+        logger.warn("distillRepeatedDeadEnds warning fragment failed", { error: String(err) });
+      }
+      continue;
+    }
     const pitfall = `Approach "${cur.approach}" fails because: ${cur.critique ?? "repeated dead end"}`;
     guide.known_pitfalls = Array.from(new Set([...(guide.known_pitfalls ?? []), pitfall]));
     guides.upsertGuideToDb(guideDb, guide);

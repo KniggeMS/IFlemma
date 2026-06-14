@@ -202,6 +202,25 @@ describe("session_end distill-to-pitfalls", () => {
     // Should not claim a distillation.
     assert.doesNotMatch(res.content[0].text, /distilled pitfall/i);
   });
+
+  test("a repeated dead-end with no practiced guide produces a warning fragment (§5.3)", async () => {
+    // Two sessions, same task_type, same dead-end pattern — but NO guide practiced,
+    // so there is no guide to distill a pitfall into.
+    await handleSessionStart({ task_type: "debugging", technologies: ["python"], project: "warn-fallback-proj" });
+    await handleSessionAttempt({ approach: "warning fallback marker approach alpha", outcome: "rejected", critique: "specific shared failure reason" });
+    await handleSessionEnd({ outcome: "failure" });
+
+    await handleSessionStart({ task_type: "debugging", technologies: ["python"], project: "warn-fallback-proj" });
+    await handleSessionAttempt({ approach: "warning fallback marker approach beta", outcome: "rejected", critique: "specific shared failure reason" });
+    await handleSessionEnd({ outcome: "failure" });
+
+    // A warning fragment should now exist (no guide, so §5.3 fallback path).
+    const row = getDb().prepareCached(
+      "SELECT type, project, fragment FROM memories WHERE fragment LIKE '%warning fallback marker%' AND type = 'warning'"
+    ).get() as { type: string; project: string | null; fragment: string } | undefined;
+    assert.ok(row, "a warning fragment should be created for a repeated dead-end with no practiced guide");
+    assert.equal(row!.type, "warning");
+  });
 });
 
 describe("session_end persistent improvement suggestions", () => {
