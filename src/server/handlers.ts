@@ -740,6 +740,34 @@ export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Pro
   };
 }
 
+/**
+ * Track read fragment IDs into the active formal/virtual session's `memories_read`.
+ * Required so `guide_practice` validation can link guides to the memories that informed them.
+ * Best-effort: never throws (memory_read must not fail because session-tracking failed).
+ */
+function trackReadIntoSession(readIds: string[]): void {
+  if (!activeSessionId || readIds.length === 0) return;
+  try {
+    const allSessions = sessions.loadSessions();
+    const session = sessions.findSession(allSessions, activeSessionId);
+    if (!session) return;
+    const existing = new Set(session.memories_read || []);
+    let added = false;
+    for (const id of readIds) {
+      if (!existing.has(id)) {
+        existing.add(id);
+        added = true;
+      }
+    }
+    if (!added) return;
+    session.memories_read = [...existing];
+    sessions.saveSessions([session]);
+    logger.flow("memory_read", "session_track_read", { session_id: activeSessionId, count: session.memories_read.length });
+  } catch (error: unknown) {
+    logger.warn("memory_read session_track_read failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResult> {
   const currentProject = args?.project || core.detectProject();
   const query = args?.query || null;
@@ -753,16 +781,19 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   if (detailIds && Array.isArray(detailIds) && detailIds.length > 0) {
     logger.debug("memory_read batch_ids", { ids: detailIds });
     const results: string[] = [];
+    const readIds: string[] = [];
     for (const did of detailIds) {
       const fragment = core.getFragmentById(did);
       if (fragment) {
         const boosted = core.boostOnAccess(fragment, context);
         results.push(core.formatMemoryDetail(boosted));
+        readIds.push(did);
       } else {
         logger.warn("memory_read batch_id not_found", { id: did });
         results.push(`Fragment [${did}] not found.`);
       }
     }
+    trackReadIntoSession(readIds);
     notifyMemoryChange();
     logger.flow("memory_read", "complete_batch", { ids_requested: detailIds.length });
     return {
@@ -781,6 +812,7 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
       };
     }
     const boosted = core.boostOnAccess(fragment, context);
+    trackReadIntoSession([detailId]);
     notifyMemoryChange();
 
     logger.flow("memory_read", "complete_single", { id: detailId, confidence: boosted.confidence?.toFixed(2) });
@@ -794,9 +826,14 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     results = core.searchMemory(query, { limit: 30 });
   } else {
     results = core.searchMemory("", { limit: 200 });
-    if (!showAll) {
-      results = core.filterByProject(results, currentProject);
-    }
+  }
+  // Apply project scope to BOTH query and browse modes (only showAll escapes it).
+  // Without this, query mode returned cross-project matches and auto-linked them
+  // permanently (associatedWith + related_to), causing cross-project data pollution.
+  if (!showAll) {
+    results = core.filterByProject(results, currentProject);
+  }
+  if (!query) {
     results = results.slice(0, 30);
   }
 
@@ -812,6 +849,9 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   for (const frag of results) {
     core.boostOnAccess(frag, context);
   }
+
+  // Record which fragments were read into the active session (for guide_practice validation).
+  trackReadIntoSession([...resultIds]);
 
   if (query && resultIds.size > 1) {
     const idArray = [...resultIds];
