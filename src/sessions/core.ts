@@ -459,6 +459,12 @@ export function saveImprovementSuggestion(sessionId: string, suggestion: string)
   return Number(result.lastInsertRowid);
 }
 
+export function getSuggestion(id: number): ImprovementSuggestion | null {
+  const db = getDb();
+  const row = db.prepareCached("SELECT * FROM improvement_suggestions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? rowToSuggestion(row) : null;
+}
+
 export function loadPendingSuggestions(limit = 3): ImprovementSuggestion[] {
   const db = getDb();
   const rows = db

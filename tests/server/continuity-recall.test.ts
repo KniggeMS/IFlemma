@@ -5,7 +5,7 @@ import path from "path";
 import os from "os";
 
 import { handleSessionStart, handleSessionEnd, handleSessionAttempt, handleGuidePractice, setNotifyChange, resetSessionState } from "../../src/server/handlers.js";
-import { setSessionsDir } from "../../src/sessions/index.js";
+import { setSessionsDir, loadAttemptsForSession } from "../../src/sessions/index.js";
 import { loadConfig } from "../../src/memory/config.js";
 import { getDb } from "../../src/db/database.js";
 
@@ -242,5 +242,44 @@ describe("suggestion_respond (accept/dismiss)", () => {
     const res = await handleSuggestionRespond({ action: "dismiss" });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /required/i);
+  });
+
+  test("dismiss penalizes the source session's dead-end attempts", async () => {
+    // 1. Start a session + record two attempts (one rejected, one promising).
+    await handleSessionStart({ task_type: "debugging", technologies: ["react"] });
+    await handleSessionAttempt({ approach: "rejected-dead-end-marker", outcome: "rejected", critique: "re-render loop" });
+    await handleSessionAttempt({ approach: "promising-untouched-marker", outcome: "promising" });
+    const { loadSessions, findActiveSession, saveImprovementSuggestion, loadPendingSuggestions } = await import("../../src/sessions/index.js");
+    const active = findActiveSession(loadSessions());
+    assert.ok(active, "expected an active session after handleSessionStart");
+    const sessionId = active!.session_id;
+    await handleSessionEnd({ outcome: "success" });
+
+    // Capture attempt confidences BEFORE (default is 0.5 per schema.ts session_attempts).
+    const before = loadAttemptsForSession(sessionId);
+    assert.equal(before.length, 2);
+    const rejectedBefore = before.find(a => a.approach === "rejected-dead-end-marker")!;
+    const promisingBefore = before.find(a => a.approach === "promising-untouched-marker")!;
+
+    // 2. Persist an improvement suggestion anchored to that session and dismiss it.
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    const id = saveImprovementSuggestion(sessionId, "tip");
+    assert.ok(loadPendingSuggestions().some(s => s.id === id));
+
+    // 3. Dismiss — should penalize only the rejected attempt (−0.02), leave promising untouched.
+    const res = await handleSuggestionRespond({ id, action: "dismiss" });
+    assert.equal(res.isError, undefined);
+    assert.match(res.content[0].text, /de-prioritized/i);
+
+    // 4. Verify: rejected confidence dropped by 0.02, promising unchanged, status is 'dismissed'.
+    const after = loadAttemptsForSession(sessionId);
+    const rejectedAfter = after.find(a => a.approach === "rejected-dead-end-marker")!;
+    const promisingAfter = after.find(a => a.approach === "promising-untouched-marker")!;
+    assert.ok(rejectedAfter.confidence < rejectedBefore.confidence, "rejected attempt confidence should drop on dismiss");
+    assert.equal(Math.round((rejectedBefore.confidence - rejectedAfter.confidence) * 1000) / 1000, 0.02, "rejected penalized by exactly 0.02");
+    assert.equal(promisingAfter.confidence, promisingBefore.confidence, "promising attempt must NOT be penalized");
+
+    const row = getDb().prepareCached("SELECT status FROM improvement_suggestions WHERE id = ?").get(id) as { status: string };
+    assert.equal(row.status, "dismissed");
   });
 });

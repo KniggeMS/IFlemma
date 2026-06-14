@@ -19,6 +19,7 @@ export {
   boostAttempt,
   penalizeAttempt,
   saveImprovementSuggestion,
+  getSuggestion,
   loadPendingSuggestions,
   updateSuggestionStatus,
 } from "./core.js";

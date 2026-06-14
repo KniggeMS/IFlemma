@@ -712,10 +712,31 @@ export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Pro
     };
   }
 
-  const verb = action === "accept" ? "Accepted" : "Dismissed";
+  // On dismiss, penalize the dead-end attempts that produced this suggestion, so the same
+  // failed path is de-prioritized in future recall (spec §5.4: dismiss → −0.02 confidence).
+  // Best-effort: a failure here must NOT undo the successful status update above.
+  if (action === "dismiss") {
+    try {
+      const suggestion = sessions.getSuggestion(id);
+      if (suggestion?.session_id) {
+        const attempts = sessions.loadAttemptsForSession(suggestion.session_id);
+        for (const a of attempts) {
+          if (a.outcome === "rejected" || a.outcome === "partial") {
+            sessions.penalizeAttempt(suggestion.session_id, a.seq, 0.02);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn("suggestion_respond dismiss penalize failed", { error: String(err), id });
+    }
+  }
+
+  const message = action === "accept"
+    ? `Accepted suggestion #${id}. It will no longer be surfaced.`
+    : `Dismissed suggestion #${id}. It will no longer be surfaced; related dead ends were de-prioritized.`;
   logger.flow("suggestion_respond", "complete", { id, action });
   return {
-    content: [{ type: "text", text: `${verb} suggestion #${id}. It will no longer be surfaced.` }],
+    content: [{ type: "text", text: message }],
   };
 }
 
