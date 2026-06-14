@@ -79,6 +79,7 @@ export interface Session {
   attempts?: Attempt[];
   status: "active" | "completed" | "abandoned";
   completed_at?: string;
+  project: string | null;
 }
 
 export type AttemptOutcome = "rejected" | "partial" | "promising";

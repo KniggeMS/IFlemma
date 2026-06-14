@@ -48,6 +48,7 @@ function rowToSession(
     lessons,
     status: (row.status as "active" | "completed" | "abandoned") ?? "active",
     completed_at: (row.ended_at as string) ?? undefined,
+    project: (row.project as string | null) ?? null,
   };
 }
 
@@ -129,8 +130,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
     const upsertStmt = db.prepareCached(`
       INSERT INTO sessions (
         id, task_type, technologies, initial_approach, final_approach, approach_changed,
-        outcome, refinement_attempts, self_critique_count, lessons, status, started_at, ended_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        outcome, refinement_attempts, self_critique_count, lessons, status, started_at, ended_at, project
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         task_type = excluded.task_type,
         technologies = excluded.technologies,
@@ -142,7 +143,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
         self_critique_count = excluded.self_critique_count,
         lessons = excluded.lessons,
         status = excluded.status,
-        ended_at = excluded.ended_at
+        ended_at = excluded.ended_at,
+        project = COALESCE(excluded.project, sessions.project)
     `);
 
     const { db: rawDb } = db;
@@ -168,6 +170,7 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
           s.status || "active",
           s.timestamp,
           s.completed_at || null,
+          s.project ?? null,
         );
 
         if (s.guides_used && s.guides_used.length > 0) {
@@ -210,8 +213,8 @@ export function saveSessions(sessions: Session[], options: { force?: boolean } =
   }
 }
 
-export function createSession(taskType: string, technologies: string[] = []): Session {
-  logger.flow("session_create", "start", { taskType, technologies });
+export function createSession(taskType: string, technologies: string[] = [], project: string | null = null): Session {
+  logger.flow("session_create", "start", { taskType, technologies, project });
   const sessionId = generateSessionId();
   const now = new Date().toISOString();
 
@@ -232,16 +235,17 @@ export function createSession(taskType: string, technologies: string[] = []): Se
     approach_changed: false,
     lessons: [],
     status: "active",
+    project,
   };
 
   try {
     const db = getDb();
     const techJson = technologies.length > 0 ? JSON.stringify(technologies) : null;
     db.prepareCached(
-      `INSERT INTO sessions (id, task_type, technologies, status, started_at)
-       VALUES (?, ?, ?, 'active', ?)`
-    ).run(sessionId, taskType, techJson, now);
-    logger.flow("session_create", "created", { sessionId });
+      `INSERT INTO sessions (id, task_type, technologies, status, started_at, project)
+       VALUES (?, ?, ?, 'active', ?, ?)`
+    ).run(sessionId, taskType, techJson, now, project);
+    logger.flow("session_create", "created", { sessionId, project });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error("Failed to persist new session to SQLite", msg);

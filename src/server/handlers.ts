@@ -21,6 +21,7 @@ interface SessionStartArgs {
   task_type?: string;
   technologies?: string[];
   initial_approach?: string;
+  project?: string;
 }
 
 interface SessionEndArgs {
@@ -259,8 +260,8 @@ function notifyMemoryChange(): void {
   }
 }
 
-function buildContinuityRecall(taskType: string): string {
-  const recent = sessions.loadRecentAttempts({ task_type: taskType, limit: 15, minConfidence: 0.2 });
+function buildContinuityRecall(taskType: string, project: string | null = null): string {
+  const recent = sessions.loadRecentAttempts({ task_type: taskType, project, limit: 15, minConfidence: 0.2 });
   if (recent.length === 0) return "";
 
   const budget = loadConfig().token_budget.continuity;
@@ -338,8 +339,9 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   const taskType = args?.task_type;
   const technologies = args?.technologies || [];
   const initialApproach = args?.initial_approach || null;
+  const project = args?.project || core.detectProject() || null;
 
-  logger.flow("session_start", "start", { task_type: taskType, technologies, has_initial_approach: !!initialApproach });
+  logger.flow("session_start", "start", { task_type: taskType, technologies, has_initial_approach: !!initialApproach, project });
 
   if (!taskType) {
     logger.warn("session_start validation failed", { reason: "missing task_type" });
@@ -358,7 +360,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
     existing.task_outcome = "abandoned";
   }
 
-  const session = sessions.createSession(taskType, technologies);
+  const session = sessions.createSession(taskType, technologies, project);
   try {
     sessions.decayAttempts();
   } catch (err) {
@@ -405,7 +407,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
 
   logger.flow("session_start", "complete", { session_id: session.session_id, task_type: taskType, suggestions: suggestions.relevant.length + suggestions.suggested.length, preloaded: relevantResults.length });
 
-  const continuity = buildContinuityRecall(taskType);
+  const continuity = buildContinuityRecall(taskType, project);
   if (continuity) {
     response += continuity;
   }

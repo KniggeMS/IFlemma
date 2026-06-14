@@ -106,6 +106,18 @@ describe("session_start continuity recall", () => {
     assert.doesNotMatch(startB.content[0].text, /unique-marker-xyz debugging/);
   });
 
+  test("recall is project-scoped: a different project does not surface another project's dead ends", async () => {
+    // projA session with a dead end (same task_type as the projB session below).
+    await handleSessionStart({ task_type: "debugging", technologies: ["react"], project: "proj-alpha" });
+    await handleSessionAttempt({ approach: "cross-project-marker-xyz debugging", outcome: "rejected", critique: "c" });
+    await handleSessionEnd({ outcome: "success" });
+
+    // projB session, SAME task_type — must NOT recall projA's dead end now that
+    // sessions.project is written and passed to loadRecentAttempts.
+    const startB = await handleSessionStart({ task_type: "debugging", technologies: ["react"], project: "proj-beta" });
+    assert.doesNotMatch(startB.content[0].text, /cross-project-marker-xyz debugging/);
+  });
+
   test("recall respects the token_budget.continuity cap (long content is truncated)", async () => {
     await handleSessionStart({ task_type: "debugging" });
     // Record a very large rejected attempt.
