@@ -23,24 +23,19 @@
 - **Repeated dead-end distillation** — TF-IDF-verified distillation of repeated failed approaches into guide pitfalls (no false positives), with a 24h self-maintaining decay of prior reasoning attempts.
 - **Self-critique loop** — `session_attempt` tool (25th) captures reasoning attempts and activates `self_critique_count`; `suggestion_respond` tool (26th) closes the dismiss→penalize leg.
 - **Persistent improvement suggestions** — low-success suggestions are persisted and surfaced at `session_start` (offered, never enforced), with deterministic ordering and re-offer semantics.
+- **Self-contained system prompt** — `src/server/prompt-content.ts` ships the full instructions template and per-tool behavioral nudges; `buildInstructions` returns real teaching content with no external pointer. Behavioral nudges are appended to tool descriptions.
 - **SCHEMA_V2** — `session_attempts` and `improvement_suggestions` tables with back-compat migration tests.
 - MCP smoke integration test asserting tool count and the continuity flow.
+
+### Changed
+- `BASE_SYSTEM_PROMPT` is now self-contained (no AGENTS.md pointer).
 
 ### Fixed
 - `session_attempt` `recordAttempt` wrapped in try/catch (best-effort, never throws).
 - Honest outcome casting, redacted echo, invalid-enum tests.
 
-## [0.12.0] - 2026-06-13
-
-### Added
-- **Self-contained system prompt** — `src/server/prompt-content.ts` ships the full instructions template and per-tool behavioral nudges; `buildInstructions` returns real teaching content with no external pointer.
-- Behavioral nudges appended to tool descriptions.
-
-### Changed
-- `BASE_SYSTEM_PROMPT` is now self-contained (no AGENTS.md pointer).
-
 ### Removed
-- **Stopped writing AGENTS.md.** Lemma no longer injects memory content into AGENTS.md files; stale Lemma blocks are auto-cleaned on startup. Memory injection now flows through the MCP prompt layer only.
+- **Stopped writing AGENTS.md.** Lemma no longer injects memory content into `AGENTS.md` files; stale Lemma blocks are auto-cleaned on startup. Memory injection now flows through the MCP prompt layer only.
 
 ## [0.11.5] - 2026-05-11
 
