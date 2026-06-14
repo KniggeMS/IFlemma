@@ -371,7 +371,7 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
   sessions.saveSessions(allSessions);
 
   const taskDesc = [taskType, ...technologies].join(" ");
-  const suggestions = guides.suggestGuides(taskDesc, []);
+  const suggestions = guides.suggestGuides(taskDesc, guides.loadGuides());
   logger.flow("session_start", "guide_suggestions", { task_desc: taskDesc, relevant: suggestions.relevant.length, suggested: suggestions.suggested.length });
 
   const formattedSuggestions = guides.formatSuggestions(suggestions);
@@ -1524,7 +1524,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
   logger.flow("guide_get", "start", { category, guide: guideName, task });
 
   if (task) {
-    const result = guides.suggestGuides(task, []);
+    const result = guides.suggestGuides(task, guides.loadGuides());
     logger.flow("guide_get", "task_suggestions", { task, relevant: result.relevant.length, suggested: result.suggested.length });
     const formatted = guides.formatSuggestions(result);
     return {

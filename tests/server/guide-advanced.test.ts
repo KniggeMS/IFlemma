@@ -8,6 +8,7 @@ import * as core from "../../src/memory/index.js";
 import * as guides from "../../src/guides/index.js";
 import * as sessions from "../../src/sessions/index.js";
 import * as handlers from "../../src/server/handlers.js";
+import { resetSessionState } from "../../src/server/handlers.js";
 import type { Guide } from "../../src/types.js";
 
 let TMPDIR: string;
@@ -17,9 +18,11 @@ beforeEach(() => {
   core.setMemoryDir(TMPDIR);
   guides.setGuidesDir(TMPDIR);
   sessions.setSessionsDir(TMPDIR);
+  resetSessionState();
 });
 
 afterEach(() => {
+  resetSessionState();
   core.setMemoryDir(path.join(os.homedir(), ".lemma"));
   guides.setGuidesDir(path.join(os.homedir(), ".lemma"));
   sessions.setSessionsDir(path.join(os.homedir(), ".lemma"));
@@ -219,5 +222,25 @@ describe("promoteToGuide — context deduplication", () => {
     guides.promoteToGuide(gs, "react", "web-frontend", "useCallback is great", "hooks");
     assert.equal(gs[0].learnings.length, 1);
     assert.deepEqual(gs[0].learnings, ["useCallback is great"]);
+  });
+});
+
+describe("suggestGuides — existingGuides tracked flag", () => {
+  test("marks a TASK_GUIDE_MAP guide as tracked when it exists in loadGuides()", () => {
+    seedGuide("react", "web-frontend");
+    const existing = guides.loadGuides();
+    assert.ok(existing.some(g => g.guide === "react"), "react guide should exist in DB after seed");
+
+    const result = guides.suggestGuides("react component hooks state", existing);
+    const match = [...result.relevant, ...result.suggested].find(s => s.guide === "react");
+    assert.ok(match, "react (in TASK_GUIDE_MAP) should be suggested for matching task");
+    assert.equal(match!.tracked, true, "guide present in existingGuides must be tracked");
+  });
+
+  test("marks the same guide NOT tracked when existingGuides omitted ([])", () => {
+    const resultEmpty = guides.suggestGuides("react component hooks state", []);
+    const matchEmpty = [...resultEmpty.relevant, ...resultEmpty.suggested].find(s => s.guide === "react");
+    assert.ok(matchEmpty, "react is in TASK_GUIDE_MAP so it surfaces even with []");
+    assert.equal(matchEmpty!.tracked, false, "guide not passed via existingGuides must not be tracked");
   });
 });
