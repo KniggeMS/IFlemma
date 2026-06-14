@@ -78,14 +78,14 @@ try {
   // --- 2. tools/list channel ---
   const { tools } = await client.listTools();
   check("26 tools returned", tools.length === 26, `got ${tools.length}`);
-  const memRead = tools.find((t) => t.name === "memory_read");
-  const memAdd = tools.find((t) => t.name === "memory_add");
-  const sessStart = tools.find((t) => t.name === "session_start");
+  const memRead = tools.find((t) => t.name === "lemma_memory_read");
+  const memAdd = tools.find((t) => t.name === "lemma_memory_add");
+  const sessStart = tools.find((t) => t.name === "lemma_session_start");
   check("memory_read carries its nudge", memRead?.description.includes("ALWAYS read before acting"));
   check("memory_read still carries memory content", memRead?.description.includes("PERSISTENT MEMORY") || memRead?.description.includes("No memories yet"));
   check("memory_add carries its nudge", memAdd?.description.includes("Save new knowledge IMMEDIATELY"));
   check("session_start carries its nudge", sessStart?.description.includes("FIRST when starting a task"));
-  const sessAttempt = tools.find((t) => t.name === "session_attempt");
+  const sessAttempt = tools.find((t) => t.name === "lemma_session_attempt");
   check("session_attempt tool exists", !!sessAttempt);
   check("session_attempt carries its nudge", sessAttempt?.description.includes("dead ends"));
   const offenders = tools.filter((t) => t.description?.includes("AGENTS.md")).map((t) => t.name);

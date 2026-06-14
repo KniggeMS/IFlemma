@@ -85,6 +85,25 @@ describe("detectConflict", () => {
     const result = detectConflict(frag, [frag]);
     assert.equal(result.length, 0);
   });
+
+  test("does not misclassify advisory/warning fragments as contradicting a fact", () => {
+    // Regression: advisory words (avoid/pitfall/mistake/...) were previously
+    // treated as negation, so a `warning` on the same topic as a `fact` was
+    // wrongly flagged as `contradicts`.
+    const fact = makeFragment(
+      "f1",
+      "Using eval in JavaScript executes arbitrary code from a string",
+      "eval executes code"
+    );
+    const warning = makeFragment(
+      "w1",
+      "Avoid using eval in JavaScript — it is a security pitfall that runs arbitrary code",
+      "avoid eval pitfall"
+    );
+    warning.type = "warning";
+    const result = detectConflict(warning, [fact]);
+    assert.equal(result.length, 0, "advisory/warning must not contradict a fact on the same topic");
+  });
 });
 
 describe("scanForConflicts", () => {

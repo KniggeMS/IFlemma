@@ -207,13 +207,13 @@ function resetTimeout(): void {
 function summarizeArgs(tool: string, args: any): string | null {
   if (!args) return null;
   switch (tool) {
-    case "memory_read":
+    case "lemma_memory_read":
       return args.id ? `id=${args.id}` : args.query ? `query=${args.query}` : "list";
-    case "memory_add":
+    case "lemma_memory_add":
       return args.title || args.fragment?.slice(0, 50);
-    case "guide_practice":
+    case "lemma_guide_practice":
       return args.guide;
-    case "memory_feedback":
+    case "lemma_memory_feedback":
       return `${args.id} useful=${args.useful}`;
     default:
       return null;
@@ -229,24 +229,24 @@ function summarizeResult(result: any): string | null {
 
 function extractSessionData(tool: string, args: any, result: any, session: VirtualSession): void {
   switch (tool) {
-    case "memory_read":
+    case "lemma_memory_read":
       if (args?.id) session.memories_accessed.push(args.id);
       if (args?.ids) {
         for (const id of args.ids) session.memories_accessed.push(id);
       }
       break;
-    case "memory_add":
+    case "lemma_memory_add":
       if (args?.project) session.project = args.project;
       const addedId = result?.content?.[0]?.text?.match(/\[(m[0-9a-f]+)\]/)?.[1];
       if (addedId) session.memories_created.push(addedId);
       break;
-    case "guide_practice":
+    case "lemma_guide_practice":
       if (args?.guide) session.guides_used.add(args.guide.toLowerCase());
       if (args?.contexts) {
         for (const c of args.contexts) session.technologies_seen.add(c.toLowerCase());
       }
       break;
-    case "memory_feedback":
+    case "lemma_memory_feedback":
       break;
   }
 }

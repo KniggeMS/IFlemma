@@ -31,7 +31,6 @@ interface JsonlMemory {
   type: string;
   related_guides: string[];
   distill_candidate?: boolean;
-  embedding?: number[];
 }
 
 interface JsonlGuide {
@@ -144,11 +143,6 @@ function migrateMemories(lemmaDb: LemmaDB, memories: JsonlMemory[]): { count: nu
     )
   `);
 
-  const insertVector = lemmaDb.prepareCached(`
-    INSERT INTO memory_vectors (rowid, embedding)
-    VALUES (?, ?)
-  `);
-
   const insertRelation = lemmaDb.prepareCached(`
     INSERT OR IGNORE INTO relations (source_id, target_id, type, note, created_at)
     VALUES (?, ?, ?, ?, ?)
@@ -191,15 +185,6 @@ function migrateMemories(lemmaDb: LemmaDB, memories: JsonlMemory[]): { count: nu
       const newId = Number(result.lastInsertRowid);
       legacyMap.set(m.id, newId);
       count++;
-
-      if (m.embedding && Array.isArray(m.embedding) && m.embedding.length > 0) {
-        try {
-          const float32 = new Float32Array(m.embedding);
-          insertVector.run(newId, Buffer.from(float32.buffer));
-        } catch (vecErr) {
-          logger.warn(`Failed to migrate embedding for memory ${m.id}`, { error: String(vecErr) });
-        }
-      }
     } catch (err) {
       logger.warn(`Failed to migrate memory ${m.id}`, { error: String(err) });
     }

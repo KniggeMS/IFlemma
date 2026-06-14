@@ -197,7 +197,7 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
       logger.warn(`Tool ${toolName} returned error: ${text}`);
     }
     logger.response("tools/call", !!result.isError, duration, { tool: toolName });
-    if (toolName !== "session_end") {
+    if (toolName !== "lemma_session_end") {
       try {
         virtualSession.recordToolCall(
           toolName,
@@ -214,10 +214,10 @@ server.setRequestHandler(CallToolRequestSchema, (async (request: any) => {
 
     if (
       !result.isError &&
-      toolName !== "memory_add" &&
-      toolName !== "memory_update" &&
-      toolName !== "memory_feedback" &&
-      toolName !== "guide_practice"
+      toolName !== "lemma_memory_add" &&
+      toolName !== "lemma_memory_update" &&
+      toolName !== "lemma_memory_feedback" &&
+      toolName !== "lemma_guide_practice"
     ) {
       const reminder = virtualSession.getReminderText();
       if (reminder && result.content?.[0]?.text) {

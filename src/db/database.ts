@@ -2,7 +2,6 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import Database from "better-sqlite3";
-import * as sqliteVec from "sqlite-vec";
 import { logger } from "../logger.js";
 import { runMigrations } from "./migration.js";
 
@@ -20,8 +19,6 @@ export class LemmaDB {
     }
 
     this.db = new Database(dbPath);
-
-    sqliteVec.load(this.db);
 
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");

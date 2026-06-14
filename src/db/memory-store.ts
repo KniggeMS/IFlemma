@@ -420,29 +420,6 @@ export function searchMemories(
   });
 }
 
-/**
- * RESERVED for v0.14 — currently dead code.
- *
- * Querying the `memory_vectors` (vec0) table is meaningless today because
- * nothing populates it: addMemory() never INSERTs an embedding, so this always
- * returns []. Kept (and exported) so a future embedding pipeline can light it
- * up without changing the query API. Live semantic retrieval is TF-IDF — see
- * src/intelligence/semantic.ts semanticSearch(). Tracked in spec §5.3.
- */
-export function searchByVector(
-  lemmaDb: LemmaDB,
-  embedding: Float32Array,
-  topK: number = 20,
-): Array<{ id: number; distance: number }> {
-  const buf = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-  const rows = lemmaDb
-    .prepareCached(
-      "SELECT rowid, distance FROM memory_vectors WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-    )
-    .all(buf, topK) as { rowid: number; distance: number }[];
-  return rows.map((r) => ({ id: r.rowid, distance: r.distance }));
-}
-
 export function addRelation(
   lemmaDb: LemmaDB,
   sourceId: number,

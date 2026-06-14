@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.15.0] - 2026-06-14
+
+An MCP-effectiveness sprint: tools are now safer and cheaper for agents to use, with no runtime behavior change beyond one bug fix. MCP effectiveness 4.6 → ~7.5/10.
+
+### ⚠ Breaking Changes
+- **All 26 tools renamed with the `lemma_` prefix** (e.g. `memory_read` → `lemma_memory_read`, `guide_get` → `lemma_guide_get`, `session_start` → `lemma_session_start`). The unprefixed names collided with other MCP servers' namespaces and made tool selection ambiguous for agents. **Existing clients must update every tool call.** This was the highest-risk change and is covered by contract tests (`tests/server/tools.test.ts`) that lock the 26-name allowlist, the prefix, the annotation matrix, and the outputSchema presence.
+
+### Added
+- **MCP tool annotations** — every tool now declares `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`. Read-only tools (10) advertise `readOnlyHint:true` so agents can call them without confirmation; destructive tools (`lemma_memory_forget`, `lemma_memory_merge`, `lemma_guide_forget`, `lemma_guide_merge`) advertise `destructiveHint:true`. All tools set `openWorldHint:false` (local DB, no external world).
+- **`outputSchema` + `structuredContent`** — every tool declares a JSON schema for its return shape, and read tools return machine-parseable `structuredContent` alongside the human-readable text. Clients can now process results programmatically instead of parsing markdown.
+- **Pagination** on `lemma_memory_read`, `lemma_semantic_search`, `lemma_memory_library` via `limit` (default 30, max 100) / `offset` (default 0), with `has_more` + `next_offset` in the response. Large result sets no longer dump hundreds of fragments into context.
+- **`response_format`** (`markdown` | `json`, default `markdown`) on the 10 read-style tools, so a client can request raw JSON for machine processing.
+- Contract test suite (`tests/server/tools.test.ts`) pinning the tool registry: exact 26-name allowlist, no duplicates, mandatory `lemma_` prefix, mandatory `outputSchema`, mandatory `openWorldHint:false`, and the full annotation matrix.
+
+### Fixed
+- **Conflict-detection false positives.** `src/intelligence/conflict.ts` matched advisory words (`avoid`, `pitfall`, `mistake`, `deprecated`, …) as negation signals, so a `warning`/`lesson` fragment was incorrectly marked `contradicts` any fact about the same topic. Advisory vocabulary is now in a separate `ADVISORY_PATTERNS` set excluded from the XOR; only true logical negation (`not`, `never`, `however`, `but`, …) participates. Regression test added.
+
+### Removed
+- **`sqlite-vec` dependency and dead vector code.** The `vec0` `memory_vectors` table and `searchByVector()` were never used at runtime — semantic search has always run on in-process TF-IDF cosine similarity (`semantic.ts`). Removed the dependency, the table DDL, and the unused function. SQLite (`better-sqlite3`) remains the primary store.
+- **`_js_backup/`** — 32 stale JS files left over from the JS→TS migration.
+- **`vitest` and `tsup` devDependencies** — the project tests with `node --test` + `tsx` and builds with `tsc`; the configs were never wired up.
+- **`decayConfidence()`** — a duplicate in-memory decay pass superseded by the DB-backed `decayMemories` (already removed at the call site in 0.14.0; the orphaned function and its tests are now gone).
+
+### Changed
+- **Dependency refresh** (`npm update`) — `@modelcontextprotocol/sdk` 1.27.1 → 1.29.0, `better-sqlite3` 12.9.0 → 12.10.1, `@types/node` 25.6.0 → 25.9.3, `tsx` 4.21.0 → 4.22.4. No major-version jumps.
+- Docs (README, README.tr, DEVELOPMENT, ROADMAP) updated to the `lemma_` tool names; the stale `memory_vectors` table reference in DEVELOPMENT.md is corrected.
+
 ## [0.14.1] - 2026-06-14
 
 ### Fixed

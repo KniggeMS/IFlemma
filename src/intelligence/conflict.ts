@@ -2,11 +2,15 @@ import type { MemoryFragment } from "../types.js";
 import type { ConflictPair } from "./types.js";
 import { logger } from "../logger.js";
 
+// Logical negation ONLY. Advisory/correction vocabulary (wrong|avoid|pitfall|
+// mistake|error|deprecated|removed|...) is intentionally NOT treated as negation:
+// warning/lesson fragments naturally contain those words, and treating them as
+// negation misclassified advisories as contradicting neutral facts on the same
+// topic. Genuine opposing pairs (good/bad, always/never, recommended/avoid) are
+// still caught via CONTRADICTION_SIGNALS below.
 const NEGATION_PATTERNS = [
   /\b(not|don'?t|doesn'?t|didn'?t|won'?t|wouldn'?t|shouldn'?t|can'?t|cannot|never|no\s)\b/i,
-  /\b(wrong|incorrect|bad|avoid|never|anti[- ]?pattern|pitfall|mistake|error)\b/i,
   /\b(however|but|instead|rather|conversely|on the contrary|actually)\b/i,
-  /\b(deprecated|obsolete|outdated|legacy|removed)\b/i,
 ];
 
 const CONTRADICTION_SIGNALS = [

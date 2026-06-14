@@ -76,15 +76,6 @@ describe("FragmentType", () => {
     assert.equal(boosted.type, "warning");
   });
 
-  test("fragment type is preserved after decayConfidence", () => {
-    const frag: MemoryFragment = {
-      ...core.createFragment("test", "ai", null, null, null, "context"),
-      accessed: 0,
-    };
-    const [decayed] = core.decayConfidence([frag]);
-    assert.equal(decayed.type, "context");
-  });
-
   test("backward compat: fragment loaded from SQLite always has type field", () => {
     const frag = core.createFragment("old content", "ai", "Old Fragment");
     core.saveMemory([frag]);

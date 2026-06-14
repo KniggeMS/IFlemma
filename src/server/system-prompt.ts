@@ -334,10 +334,18 @@ export async function buildInjectedTools(projectName: string | null): Promise<To
         properties: { ...tool.inputSchema.properties },
         required: tool.inputSchema.required ? [...tool.inputSchema.required] : undefined,
       },
+      ...(tool.annotations ? { annotations: { ...tool.annotations } } : {}),
+      ...(tool.outputSchema ? {
+        outputSchema: {
+          type: tool.outputSchema.type,
+          properties: { ...tool.outputSchema.properties },
+          required: tool.outputSchema.required ? [...tool.outputSchema.required] : undefined,
+        },
+      } : {}),
     };
   });
 
-  const memoryReadIdx = clonedTools.findIndex(t => t.name === "memory_read");
+  const memoryReadIdx = clonedTools.findIndex(t => t.name === "lemma_memory_read");
   if (memoryReadIdx >= 0) {
     clonedTools[memoryReadIdx] = {
       ...clonedTools[memoryReadIdx],

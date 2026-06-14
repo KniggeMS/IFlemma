@@ -776,9 +776,7 @@ export function applySessionDecay(): MemoryFragment[] {
   logger.flow("decay", "session_start");
 
   // Single source of truth: decay is applied once, in the DB, by store.decayMemories
-  // (24h rate-limited). Previously a second, in-memory decayConfidence() pass ran in
-  // parallel and returned a value that was NOT written back — so injected memory
-  // diverged from the DB across N calls (in-memory decayed N×, DB 1× per 24h).
+  // (24h rate-limited).
   try {
     const db = getDb();
     store.decayMemories(db);
@@ -952,30 +950,6 @@ export function filterByProject(fragments: MemoryFragment[], currentProject: str
     (f.project && f.project.toLowerCase() === project) ||
     (f.project === null || f.project === undefined)
   );
-}
-
-export function decayConfidence(fragments: MemoryFragment[]): MemoryFragment[] {
-  const DECAY_RATE = 0.002;
-
-  return fragments
-    .map(frag => {
-      if (frag.accessed > 0) {
-        return {
-          ...frag,
-          accessed: 0,
-          negativeHits: 0
-        };
-      }
-
-      const newConfidence = frag.confidence - DECAY_RATE;
-
-      return {
-        ...frag,
-        confidence: Math.max(0, newConfidence),
-        accessed: 0,
-        negativeHits: 0
-      };
-    });
 }
 
 function injectionScore(fragment: MemoryFragment): number {

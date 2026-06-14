@@ -51,7 +51,7 @@ Bellekler `tools/list` üzerinden araç açıklamalarına enjekte edilir. LLM he
 
 **Bellek türleri:** `fact`, `pattern`, `lesson`, `warning`, `context`
 
-**Bilgi hattı:** Memory (ne biliyorsun, `memory_add`) → Pattern (`type: "pattern"`) → Guide (nasıl çalışıyorsun, `guide_distill` → `guide_practice`)
+**Bilgi hattı:** Memory (ne biliyorsun, `lemma_memory_add`) → Pattern (`type: "pattern"`) → Guide (nasıl çalışıyorsun, `lemma_guide_distill` → `lemma_guide_practice`)
 
 **Proje dosyasına müdahale yok:** Lemma belleği MCP prompt katmanı (sistem prompt'u ve araç açıklamaları) üzerinden enjekte eder; `AGENTS.md`'ye veya herhangi bir proje dosyasına asla yazmaz. Tüm MCP istemcilerinde aynı çalışır. (Eski sürümlerin bıraktığı `<!-- lemma:* -->` blokları açılışta otomatik temizlenir.)
 
@@ -71,47 +71,47 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 
 | Araç | Açıklama |
 |------|----------|
-| `memory_read` | Fragmanları oku/ara. Özet modu veya ID ile tam detay |
-| `memory_add` | Bulguları kaydet. Gizli bilgileri otomatik sansürler, tekrarları ve çelişkileri algılar |
-| `memory_update` | ID ile fragman güncelle |
-| `memory_feedback` | Pozitif/negatif geri bildirim, güveni ayarlar |
-| `memory_forget` | Fragman sil |
-| `memory_merge` | Fragmanları birleştir, ilişkiler ve rehber bağlantıları aktarılır |
-| `memory_relate` | Tipli bağlantılar oluştur (`contradicts`, `supersedes`, `supports`, `related_to`) |
-| `memory_stats` | Fragman sayıları, güven, proje dağılımı |
-| `memory_audit` | Bütünlük kontrolü (yetim, tekrar, anomali) |
-| `memory_library` | Tüm bilgi tabanının analiz sinyalleri ve önerilerle tam anlık görüntüsü |
+| `lemma_memory_read` | Fragmanları oku/ara. Özet modu veya ID ile tam detay |
+| `lemma_memory_add` | Bulguları kaydet. Gizli bilgileri otomatik sansürler, tekrarları ve çelişkileri algılar |
+| `lemma_memory_update` | ID ile fragman güncelle |
+| `lemma_memory_feedback` | Pozitif/negatif geri bildirim, güveni ayarlar |
+| `lemma_memory_forget` | Fragman sil |
+| `lemma_memory_merge` | Fragmanları birleştir, ilişkiler ve rehber bağlantıları aktarılır |
+| `lemma_memory_relate` | Tipli bağlantılar oluştur (`contradicts`, `supersedes`, `supports`, `related_to`) |
+| `lemma_memory_stats` | Fragman sayıları, güven, proje dağılımı |
+| `lemma_memory_audit` | Bütünlük kontrolü (yetim, tekrar, anomali) |
+| `lemma_memory_library` | Tüm bilgi tabanının analiz sinyalleri ve önerilerle tam anlık görüntüsü |
 
 ### Rehberler (7)
 
 | Araç | Açıklama |
 |------|----------|
-| `guide_get` | Kullanıma göre sıralı rehberler, kategori veya görev filtresi |
-| `guide_practice` | Rehber kullanımını kaydet. Rehber yoksa otomatik oluşturur |
-| `guide_create` | Detaylı kılavuzla rehber oluştur |
-| `guide_distill` | Belleği rehber öğrenimine dönüştür (çift yönlü bağlantı) |
-| `guide_update` | Rehber özelliklerini, anti-örüntüleri, tuzakları güncelle |
-| `guide_forget` | Rehber sil |
-| `guide_merge` | Rehberleri birleştir, kaynak bellekleri aktar |
+| `lemma_guide_get` | Kullanıma göre sıralı rehberler, kategori veya görev filtresi |
+| `lemma_guide_practice` | Rehber kullanımını kaydet. Rehber yoksa otomatik oluşturur |
+| `lemma_guide_create` | Detaylı kılavuzla rehber oluştur |
+| `lemma_guide_distill` | Belleği rehber öğrenimine dönüştür (çift yönlü bağlantı) |
+| `lemma_guide_update` | Rehber özelliklerini, anti-örüntüleri, tuzakları güncelle |
+| `lemma_guide_forget` | Rehber sil |
+| `lemma_guide_merge` | Rehberleri birleştir, kaynak bellekleri aktar |
 
 ### Oturumlar (5)
 
 | Araç | Açıklama |
 |------|----------|
-| `session_start` | İzlenen oturum başlat, ilgili bağlamı önceden yükle |
-| `session_attempt` | Denenen bir yaklaşımı kaydet (reddedilen/kısmi/umut verici) — çıkmaz sokaklar değerli bellektir |
-| `session_end` | İnceleme, otomatik bağlama ve önerilerle oturumu sonlandır |
-| `session_stats` | Sanal oturum istatistikleri |
-| `suggestion_respond` | Sunulan iyileştirme önerisini kabul et veya reddet (Lemma tercihlerini öğrenir) |
+| `lemma_session_start` | İzlenen oturum başlat, ilgili bağlamı önceden yükle |
+| `lemma_session_attempt` | Denenen bir yaklaşımı kaydet (reddedilen/kısmi/umut verici) — çıkmaz sokaklar değerli bellektir |
+| `lemma_session_end` | İnceleme, otomatik bağlama ve önerilerle oturumu sonlandır |
+| `lemma_session_stats` | Sanal oturum istatistikleri |
+| `lemma_suggestion_respond` | Sunulan iyileştirme önerisini kabul et veya reddet (Lemma tercihlerini öğrenir) |
 
 ### Zeka (4)
 
 | Araç | Açıklama |
 |------|----------|
-| `conflict_scan` | Tüm bellekleri çelişkiler için tara |
-| `proactive_analysis` | Tam bilgi tabanı analizi: eski, yetim, damıtma adayları, kullanım dışı |
-| `project_analytics` | Oturumlar arası proje sağlığı, büyüme oranı, beceri kapsama |
-| `semantic_search` | TF-IDF benzerlik araması |
+| `lemma_conflict_scan` | Tüm bellekleri çelişkiler için tara |
+| `lemma_proactive_analysis` | Tam bilgi tabanı analizi: eski, yetim, damıtma adayları, kullanım dışı |
+| `lemma_project_analytics` | Oturumlar arası proje sağlığı, büyüme oranı, beceri kapsama |
+| `lemma_semantic_search` | TF-IDF benzerlik araması |
 
 ## Yapılandırma
 

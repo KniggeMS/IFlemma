@@ -43,7 +43,7 @@ describe("TOOL_NUDGES", () => {
   });
 
   test("covers the critical workflow tools", () => {
-    const required = ["session_start", "memory_read", "memory_add", "session_end"];
+    const required = ["lemma_session_start", "lemma_memory_read", "lemma_memory_add", "lemma_session_end"];
     for (const name of required) {
       assert.ok(name in TOOL_NUDGES, `Missing nudge for critical tool: ${name}`);
     }

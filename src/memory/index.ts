@@ -9,7 +9,6 @@ export {
   applySessionDecay,
   migrateConfidenceFloor,
   filterByProject,
-  decayConfidence,
   searchAndSortFragments,
   filterFragments,
   formatMemoryForLLM,

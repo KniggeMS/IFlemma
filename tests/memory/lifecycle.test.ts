@@ -39,43 +39,6 @@ describe("Learning System Lifecycle", () => {
     assert.equal(boosted.accessed, 3);
   });
 
-  test("negative feedback does not affect decay rate", () => {
-    const good: MemoryFragment = { ...core.createFragment("good", "ai"), confidence: 0.8, accessed: 0, negativeHits: 0 };
-    const bad: MemoryFragment = { ...core.createFragment("bad", "ai"), confidence: 0.8, accessed: 0, negativeHits: 3 };
-
-    const [decayedGood]: MemoryFragment[] = core.decayConfidence([good]);
-    const [decayedBad]: MemoryFragment[] = core.decayConfidence([bad]);
-
-    assert.equal(decayedGood.confidence, decayedBad.confidence,
-      "negativeHits should not affect decay rate");
-  });
-
-  test("boost + decay equilibrium: frequent use sustains confidence", () => {
-    let frag: MemoryFragment = { ...core.createFragment("popular", "ai"), confidence: 1.0, accessed: 0 };
-
-    for (let i = 0; i < 10; i++) {
-      frag = core.boostOnAccess(frag, "daily-use");
-      frag = core.decayConfidence([frag])[0];
-    }
-
-    assert.ok(frag.confidence >= 0.99,
-      `Frequently used fragment should stay strong (shield), got ${frag.confidence}`);
-    assert.deepEqual(frag.tags, ["daily-use"]);
-  });
-
-  test("unused fragment decays slowly", () => {
-    let frag: MemoryFragment = { ...core.createFragment("forgotten", "ai"), confidence: 1.0, accessed: 0 };
-
-    for (let i = 0; i < 30; i++) {
-      frag = core.decayConfidence([frag])[0];
-    }
-
-    assert.ok(frag.confidence < 0.95,
-      `Unused fragment should decay slowly, got ${frag.confidence}`);
-    assert.ok(frag.confidence > 0.9,
-      `Decay rate should be slow (0.002/session), got ${frag.confidence}`);
-  });
-
   test("associations track co-accessed fragments", () => {
     const frags: MemoryFragment[] = [
       core.createFragment("error handling", "ai"),
@@ -91,7 +54,7 @@ describe("Learning System Lifecycle", () => {
     assert.ok(frags[2].associatedWith.includes(frags[0].id));
   });
 
-  test("full lifecycle: add → read (boost) → feedback → decay", async () => {
+  test("full lifecycle: add → read (boost) → feedback", async () => {
     seedMemory();
     let loaded: MemoryFragment[] = core.loadMemory();
     const fragId: string = loaded[0].id;
@@ -106,9 +69,8 @@ describe("Learning System Lifecycle", () => {
 
     loaded = core.loadMemory();
     frag = loaded.find(f => f.id === fragId);
-    const decayed: MemoryFragment = core.decayConfidence([frag!])[0];
 
-    assert.ok(decayed.confidence > 0.8,
-      `Confidence should remain high after boost, got ${decayed.confidence}`);
+    assert.ok(frag!.confidence > 0.8,
+      `Confidence should remain high after boost + positive feedback, got ${frag!.confidence}`);
   });
 });

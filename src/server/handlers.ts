@@ -10,10 +10,12 @@ import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-sto
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
 import { loadConfig, estimateTokens } from "../memory/config.js";
+import { buildResult, paginationMeta } from "./format.js";
 import type { FragmentType, Attempt, AttemptOutcome, Session, SuggestionStatus } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
+  structuredContent?: unknown;
   isError?: boolean;
 }
 
@@ -53,6 +55,9 @@ interface MemoryReadArgs {
   minConfidence?: number;
   afterDate?: string;
   beforeDate?: string;
+  limit?: number;
+  offset?: number;
+  response_format?: "markdown" | "json";
 }
 
 interface MemoryAddArgs {
@@ -97,12 +102,14 @@ interface MemoryRelateArgs {
 
 interface MemoryStatsArgs {
   project?: string;
+  response_format?: "markdown" | "json";
 }
 
 interface GuideGetArgs {
   category?: string;
   guide?: string;
   task?: string;
+  response_format?: "markdown" | "json";
 }
 
 interface GuidePracticeArgs {
@@ -154,11 +161,15 @@ interface GuideMergeArgs {
 
 interface SessionStatsArgs {
   count?: number;
+  response_format?: "markdown" | "json";
 }
 
 interface MemoryLibraryArgs {
   project?: string | null;
   focus?: "full" | "stale" | "duplicates" | "orphans" | "distill" | "guides";
+  limit?: number;
+  offset?: number;
+  response_format?: "markdown" | "json";
 }
 
 interface ToolCallRequest {
@@ -921,29 +932,36 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     };
   }
 
-  let results: any[];
+  // Pagination params (browse/search branch only; id/ids branches returned above).
+  const limit = Math.min(Math.max(args?.limit ?? 30, 1), 100);
+  const offset = Math.max(0, args?.offset ?? 0);
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
+
+  // Fetch a generous superset so offset+limit slicing has room to work. The old
+  // hard 30/200 caps are gone — callers page through via limit/offset instead.
+  let allResults: any[];
   if (query) {
-    results = core.searchMemory(query, { limit: 30 });
+    allResults = core.searchMemory(query, { limit: 500 });
   } else {
-    results = core.searchMemory("", { limit: 200 });
+    allResults = core.searchMemory("", { limit: 500 });
   }
   // Apply project scope to BOTH query and browse modes (only showAll escapes it).
   // Without this, query mode returned cross-project matches and auto-linked them
   // permanently (associatedWith + related_to), causing cross-project data pollution.
   if (!showAll) {
-    results = core.filterByProject(results, currentProject);
+    allResults = core.filterByProject(allResults, currentProject);
   }
-  if (!query) {
-    results = results.slice(0, 30);
-  }
-
-  results = core.filterFragments(results, {
+  allResults = core.filterFragments(allResults, {
     minConfidence: args?.minConfidence,
     afterDate: args?.afterDate,
     beforeDate: args?.beforeDate,
   });
 
-  logger.flow("memory_read", "search_results", { query, result_count: (results as any[]).length, minConfidence: args?.minConfidence });
+  const total = allResults.length;
+  const results = allResults.slice(offset, offset + limit);
+  const page = paginationMeta(total, limit, offset);
+
+  logger.flow("memory_read", "search_results", { query, total, result_count: results.length, offset, limit, minConfidence: args?.minConfidence });
 
   const resultIds = new Set((results as any[]).map((r: any) => r.id));
   for (const frag of results) {
@@ -1008,14 +1026,30 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
   if (autoRelateCount > 0) {
     hookResponse += `\nAuto-linked ${autoRelateCount} co-read fragments with related_to relations.`;
   }
-  if (!query && !detailId) {
+  if (page.has_more) {
+    hookResponse += `\nShowing ${results.length} of ${total} fragments (offset ${offset}). Pass offset=${page.next_offset} for the next page, or use the query parameter to search.`;
+  } else if (!query && !detailId) {
     hookResponse += `\nShowing top ${(results as any[]).length} fragments (ranked by relevance). Use query parameter to search, or id for a specific fragment.`;
   }
 
-  logger.flow("memory_read", "complete_search", { query, results: (results as any[]).length, scope: scopeInfo });
-  return {
-    content: [{ type: "text", text: hookResponse }],
+  logger.flow("memory_read", "complete_search", { query, total, results: (results as any[]).length, scope: scopeInfo, has_more: page.has_more });
+
+  const structured = {
+    count: (results as any[]).length,
+    total,
+    fragments: (results as any[]).map((r: any) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description ?? null,
+      type: r.type ?? "fact",
+      confidence: r.confidence,
+      project: r.project ?? null,
+    })),
+    has_more: page.has_more,
+    next_offset: page.next_offset,
   };
+
+  return buildResult({ text: hookResponse, data: structured, format: responseFormat });
 }
 
 export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult> {
@@ -1620,6 +1654,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
   const category = args?.category || null;
   const guideName = args?.guide || null;
   const task = args?.task || null;
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
   logger.flow("guide_get", "start", { category, guide: guideName, task });
 
@@ -1627,18 +1662,14 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
     const result = guides.suggestGuides(task, guides.loadGuides());
     logger.flow("guide_get", "task_suggestions", { task, relevant: result.relevant.length, suggested: result.suggested.length });
     const formatted = guides.formatSuggestions(result);
-    return {
-      content: [{ type: "text", text: formatted }],
-    };
+    return buildResult({ text: formatted, data: { count: result.suggested.length, guides: result.suggested }, format: responseFormat });
   }
 
   if (guideName) {
     logger.flow("guide_get", "single_guide_lookup", { guide: guideName });
     const guide = guides.getGuideFromDb(guideName);
     logger.flow("guide_get", "complete_single", { guide: guideName, found: !!guide });
-    return {
-      content: [{ type: "text", text: guides.formatGuideDetail(guide) }],
-    };
+    return buildResult({ text: guides.formatGuideDetail(guide), data: { guide }, format: responseFormat });
   }
 
   const filtered = category
@@ -1647,9 +1678,7 @@ export async function handleGuideGet(args?: GuideGetArgs): Promise<ToolResult> {
 
   logger.flow("guide_get", "complete_list", { category, filtered: filtered.length });
   const formatted = guides.formatGuidesForLLM(filtered);
-  return {
-    content: [{ type: "text", text: formatted }],
-  };
+  return buildResult({ text: formatted, data: { count: filtered.length, guides: filtered }, format: responseFormat });
 }
 
 export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<ToolResult> {
@@ -2105,6 +2134,7 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
 
 export async function handleMemoryStats(args?: MemoryStatsArgs): Promise<ToolResult> {
   const project = args?.project || null;
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
   logger.flow("memory_stats", "start", { project });
 
@@ -2113,12 +2143,11 @@ export async function handleMemoryStats(args?: MemoryStatsArgs): Promise<ToolRes
   const stats = store.getMemoryStats(db, project);
 
   logger.flow("memory_stats", "complete", { project, total: stats.total, avg_confidence: stats.avg_confidence?.toFixed(2) });
-  return {
-    content: [{ type: "text", text: core.formatStats(stats) }],
-  };
+  return buildResult({ text: core.formatStats(stats), data: stats, format: responseFormat });
 }
 
-export async function handleMemoryAudit(_args?: Record<string, unknown>): Promise<ToolResult> {
+export async function handleMemoryAudit(args?: { response_format?: "markdown" | "json" }): Promise<ToolResult> {
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
   logger.flow("memory_audit", "start");
 
   logger.data("memory", "load");
@@ -2126,13 +2155,12 @@ export async function handleMemoryAudit(_args?: Record<string, unknown>): Promis
   const result = core.auditMemory(memory);
 
   logger.flow("memory_audit", "complete", { issues_count: result.issues?.length || 0 });
-  return {
-    content: [{ type: "text", text: core.formatAuditReport(result) }],
-  };
+  return buildResult({ text: core.formatAuditReport(result), data: result, format: responseFormat });
 }
 
 export async function handleSessionStats(args?: SessionStatsArgs): Promise<ToolResult> {
   const count = args?.count || 10;
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
   logger.flow("session_stats", "start", { count });
 
@@ -2165,32 +2193,61 @@ export async function handleSessionStats(args?: SessionStatsArgs): Promise<ToolR
   }
 
   logger.flow("session_stats", "complete", { count, recent_count: recentSessions.length, has_current: !!current });
-  return { content: [{ type: "text", text: output }] };
+  const data = {
+    active_session: current ? {
+      tool_calls: current.tool_calls.length,
+      technologies: [...current.technologies_seen],
+      guides_used: [...current.guides_used],
+    } : null,
+    recent_sessions: recentSessions.slice(0, 5),
+  };
+  return buildResult({ text: output, data, format: responseFormat });
 }
 
 export async function handleMemoryLibrary(args?: MemoryLibraryArgs): Promise<ToolResult> {
   const project = args?.project ?? null;
   const focus = args?.focus ?? "full";
+  const limit = Math.min(Math.max(args?.limit ?? 50, 1), 200);
+  const offset = Math.max(0, args?.offset ?? 0);
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
-  logger.flow("memory_library", "start", { project, focus });
+  logger.flow("memory_library", "start", { project, focus, limit, offset });
 
   const db = getDb();
 
   const snapshot = collectLibrarySnapshot(db, { project, focus });
+
+  // Page the fragments list — the snapshot is otherwise a full-DB view.
+  const fragTotal = Array.isArray((snapshot as any).fragments) ? (snapshot as any).fragments.length : 0;
+  const page = paginationMeta(fragTotal, limit, offset);
+  const snapshotData = {
+    ...snapshot,
+    fragments: Array.isArray((snapshot as any).fragments)
+      ? (snapshot as any).fragments.slice(offset, offset + limit)
+      : (snapshot as any).fragments,
+    fragments_total: fragTotal,
+    has_more: page.has_more,
+    next_offset: page.next_offset,
+  };
+
   const formatted = formatLibrarySnapshot(snapshot, focus);
+  let text = formatted;
+  if (page.has_more) {
+    text += `\n\nShowing ${(snapshotData as any).fragments.length} of ${fragTotal} fragments (offset ${offset}). Pass offset=${page.next_offset} for the next page.`;
+  }
 
   logger.flow("memory_library", "complete", {
-    total_memories: snapshot.total_memories,
-    total_guides: snapshot.total_guides,
-    suggestions: snapshot.suggestions.length,
+    total_memories: (snapshot as any).total_memories,
+    total_guides: (snapshot as any).total_guides,
+    suggestions: (snapshot as any).suggestions?.length ?? 0,
+    fragments_shown: (snapshotData as any).fragments.length,
   });
 
-  return {
-    content: [{ type: "text", text: formatted }],
-  };
+  return buildResult({ text, data: snapshotData, format: responseFormat });
 }
 
-export async function handleConflictScan(args?: { project?: string }): Promise<ToolResult> {
+export async function handleConflictScan(args?: { project?: string; response_format?: "markdown" | "json" }): Promise<ToolResult> {
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
   logger.flow("conflict_scan", "start", { project: args?.project });
 
   const memory = core.loadMemory();
@@ -2201,12 +2258,11 @@ export async function handleConflictScan(args?: { project?: string }): Promise<T
   const conflicts = intel.scanForConflicts(filtered);
 
   logger.flow("conflict_scan", "complete", { conflicts: conflicts.length });
-  return {
-    content: [{ type: "text", text: intel.formatConflictResults(conflicts) }],
-  };
+  return buildResult({ text: intel.formatConflictResults(conflicts), data: { count: conflicts.length, conflicts }, format: responseFormat });
 }
 
-export async function handleProactiveAnalysis(args?: { project?: string }): Promise<ToolResult> {
+export async function handleProactiveAnalysis(args?: { project?: string; response_format?: "markdown" | "json" }): Promise<ToolResult> {
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
   logger.flow("proactive_analysis", "start", { project: args?.project });
 
   const memory = core.loadMemory();
@@ -2236,30 +2292,25 @@ export async function handleProactiveAnalysis(args?: { project?: string }): Prom
   }
 
   logger.flow("proactive_analysis", "complete", { suggestions: suggestions.length });
-  return {
-    content: [{ type: "text", text: output }],
-  };
+  return buildResult({ text: output, data: { count: suggestions.length, analyzed_memories: filtered.length, analyzed_guides: allGuides.length, suggestions }, format: responseFormat });
 }
 
-export async function handleProjectAnalytics(args?: { project?: string }): Promise<ToolResult> {
+export async function handleProjectAnalytics(args?: { project?: string; response_format?: "markdown" | "json" }): Promise<ToolResult> {
   const project = args?.project || null;
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
   if (!project) {
     logger.flow("project_analytics", "all_projects");
     const db = getDb();
     const allProgress = intel.getAllProjectsAnalytics(db);
     if (allProgress.length === 0) {
-      return {
-        content: [{ type: "text", text: "No projects found with session or memory data." }],
-      };
+      return buildResult({ text: "No projects found with session or memory data.", data: { count: 0, projects: [] }, format: responseFormat });
     }
     let output = `=== ALL PROJECTS OVERVIEW ===\n\n`;
     for (const p of allProgress) {
       output += `${p.project}: ${p.total_sessions} sessions, ${p.total_memories} memories, health ${(p.health_score * 100).toFixed(0)}%\n`;
     }
-    return {
-      content: [{ type: "text", text: output }],
-    };
+    return buildResult({ text: output, data: { count: allProgress.length, projects: allProgress }, format: responseFormat });
   }
 
   logger.flow("project_analytics", "start", { project });
@@ -2268,17 +2319,17 @@ export async function handleProjectAnalytics(args?: { project?: string }): Promi
   const formatted = intel.formatProjectProgress(progress);
 
   logger.flow("project_analytics", "complete", { project, health: progress.health_score });
-  return {
-    content: [{ type: "text", text: formatted }],
-  };
+  return buildResult({ text: formatted, data: { ...progress, project }, format: responseFormat });
 }
 
-export async function handleSemanticSearch(args?: { query?: string; project?: string; topK?: number }): Promise<ToolResult> {
+export async function handleSemanticSearch(args?: { query?: string; project?: string; topK?: number; offset?: number; response_format?: "markdown" | "json" }): Promise<ToolResult> {
   const query = args?.query;
   const project = args?.project || null;
   const topK = args?.topK || 10;
+  const offset = Math.max(0, args?.offset ?? 0);
+  const responseFormat = args?.response_format === "json" ? "json" : "markdown";
 
-  logger.flow("semantic_search", "start", { query: query?.slice(0, 50), project, topK });
+  logger.flow("semantic_search", "start", { query: query?.slice(0, 50), project, topK, offset });
 
   if (!query || typeof query !== "string") {
     return {
@@ -2288,12 +2339,17 @@ export async function handleSemanticSearch(args?: { query?: string; project?: st
   }
 
   const db = getDb();
-  const results = intel.semanticSearch(db, query, { project, topK });
+  // Fetch a superset so offset pagination has room; topK still bounds the page size.
+  const cappedK = Math.min(Math.max(topK, 1), 30);
+  const fetchK = cappedK + offset;
+  const allResults = intel.semanticSearch(db, query, { project, topK: fetchK });
+  const total = allResults.length;
+  const results = allResults.slice(offset, offset + cappedK);
+  const page = paginationMeta(total, cappedK, offset);
 
   if (results.length === 0) {
-    return {
-      content: [{ type: "text", text: `No semantically similar memories found for: "${query}"` }],
-    };
+    const empty = { count: 0, total, results: [], has_more: page.has_more, next_offset: page.next_offset };
+    return buildResult({ text: `No semantically similar memories found for: "${query}"`, data: empty, format: responseFormat });
   }
 
   let output = `=== SEMANTIC SEARCH RESULTS ===\nQuery: "${query}"\nFound ${results.length} similar memories:\n\n`;
@@ -2301,11 +2357,26 @@ export async function handleSemanticSearch(args?: { query?: string; project?: st
     output += `  [${(r.score * 100).toFixed(0)}%] [${r.memory_id}] "${r.title}"\n`;
     output += `      ${r.fragment.substring(0, 100)}...\n`;
   }
+  if (page.has_more) {
+    output += `\nMore results available. Pass offset=${page.next_offset} for the next page.`;
+  }
 
-  logger.flow("semantic_search", "complete", { results: results.length });
-  return {
-    content: [{ type: "text", text: output }],
+  logger.flow("semantic_search", "complete", { results: results.length, has_more: page.has_more });
+
+  const structured = {
+    count: results.length,
+    total,
+    results: results.map((r: any) => ({
+      id: r.memory_id,
+      title: r.title,
+      score: r.score,
+      fragment_preview: r.fragment.substring(0, 200),
+    })),
+    has_more: page.has_more,
+    next_offset: page.next_offset,
   };
+
+  return buildResult({ text: output, data: structured, format: responseFormat });
 }
 
 export async function handleCallTool(request: ToolCallRequest): Promise<ToolResult> {
@@ -2316,133 +2387,133 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
 
   try {
     switch (name) {
-      case "session_start": {
+      case "lemma_session_start": {
         const result = await handleSessionStart(args as SessionStartArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "session_end": {
+      case "lemma_session_end": {
         const result = await handleSessionEnd(args as SessionEndArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "session_attempt": {
+      case "lemma_session_attempt": {
         const result = await handleSessionAttempt(args as SessionAttemptArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "suggestion_respond": {
+      case "lemma_suggestion_respond": {
         const result = await handleSuggestionRespond(args as SuggestionRespondArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_read": {
+      case "lemma_memory_read": {
         const result = await handleMemoryRead(args as MemoryReadArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_add": {
+      case "lemma_memory_add": {
         const result = await handleMemoryAdd(args as MemoryAddArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_update": {
+      case "lemma_memory_update": {
         const result = await handleMemoryUpdate(args as MemoryUpdateArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_forget": {
+      case "lemma_memory_forget": {
         const result = await handleMemoryForget(args as MemoryForgetArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_feedback": {
+      case "lemma_memory_feedback": {
         const result = await handleMemoryFeedback(args as MemoryFeedbackArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_merge": {
+      case "lemma_memory_merge": {
         const result = await handleMemoryMerge(args as MemoryMergeArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_relate": {
+      case "lemma_memory_relate": {
         const result = await handleMemoryRelate(args as MemoryRelateArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_stats": {
+      case "lemma_memory_stats": {
         const result = await handleMemoryStats(args as MemoryStatsArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_audit": {
-        const result = await handleMemoryAudit(args);
+      case "lemma_memory_audit": {
+        const result = await handleMemoryAudit(args as { response_format?: "markdown" | "json" });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_get": {
+      case "lemma_guide_get": {
         const result = await handleGuideGet(args as GuideGetArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_practice": {
+      case "lemma_guide_practice": {
         const result = await handleGuidePractice(args as GuidePracticeArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_create": {
+      case "lemma_guide_create": {
         const result = await handleGuideCreate(args as GuideCreateArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_distill": {
+      case "lemma_guide_distill": {
         const result = await handleGuideDistill(args as GuideDistillArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_update": {
+      case "lemma_guide_update": {
         const result = await handleGuideUpdate(args as GuideUpdateArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_forget": {
+      case "lemma_guide_forget": {
         const result = await handleGuideForget(args as GuideForgetArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "guide_merge": {
+      case "lemma_guide_merge": {
         const result = await handleGuideMerge(args as GuideMergeArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "session_stats": {
+      case "lemma_session_stats": {
         const result = await handleSessionStats(args as SessionStatsArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "memory_library": {
+      case "lemma_memory_library": {
         const result = await handleMemoryLibrary(args as MemoryLibraryArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "conflict_scan": {
-        const result = await handleConflictScan(args as { project?: string });
+      case "lemma_conflict_scan": {
+        const result = await handleConflictScan(args as { project?: string; response_format?: "markdown" | "json" });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "proactive_analysis": {
-        const result = await handleProactiveAnalysis(args as { project?: string });
+      case "lemma_proactive_analysis": {
+        const result = await handleProactiveAnalysis(args as { project?: string; response_format?: "markdown" | "json" });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "project_analytics": {
-        const result = await handleProjectAnalytics(args as { project?: string });
+      case "lemma_project_analytics": {
+        const result = await handleProjectAnalytics(args as { project?: string; response_format?: "markdown" | "json" });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }
-      case "semantic_search": {
-        const result = await handleSemanticSearch(args as { query?: string; project?: string; topK?: number });
+      case "lemma_semantic_search": {
+        const result = await handleSemanticSearch(args as { query?: string; project?: string; topK?: number; offset?: number; response_format?: "markdown" | "json" });
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }

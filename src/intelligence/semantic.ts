@@ -4,19 +4,15 @@ import type { TfidfVector } from "./types.js";
 import { logger } from "../logger.js";
 
 /**
- * Semantic search — OFFICIAL approach is in-memory TF-IDF cosine similarity.
+ * Semantic search — in-memory TF-IDF cosine similarity.
  *
- * Lemma intentionally does NOT embed memories into vectors at write time. The
- * `memory_vectors` (vec0) table in schema.ts and `searchByVector()` in
- * memory-store.ts are scaffolding reserved for a possible v0.14 embedding
- * pipeline (ONNX/transformers + INSERT on addMemory). As of v0.13 they are
- * unreachable: nothing populates `memory_vectors`, so `searchByVector()` always
- * returns []. All live semantic retrieval flows through `semanticSearch()`
- * below, which builds TF-IDF vectors over the current memory set each call and
- * ranks by cosine similarity (project-scoped, case-insensitive).
+ * Lemma does not embed memories into vectors; all semantic retrieval flows
+ * through `semanticSearch()` below, which builds TF-IDF vectors over the
+ * current memory set each call and ranks by cosine similarity (project-scoped,
+ * case-insensitive).
  *
  * Trade-off accepted: zero native dependency, instant indexing, but O(N) per
- * query (acceptable for local-first single-user scale). See spec §5.3.
+ * query (acceptable for local-first single-user scale).
  */
 
 const STOP_WORDS = new Set([

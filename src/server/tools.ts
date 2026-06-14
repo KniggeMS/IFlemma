@@ -12,15 +12,34 @@ interface ToolInputSchema {
   required?: string[];
 }
 
+/** MCP tool annotations — hints to clients about a tool's behavior. */
+export interface ToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+  title?: string;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
+  annotations?: ToolAnnotations;
+  outputSchema?: ToolInputSchema;
 }
+
+// Annotation presets. All lemma tools are local (single SQLite DB), so every
+// tool sets openWorldHint:false. Tools differ on read-only / destructive /
+// idempotent semantics — grouped into four presets below.
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const DESTRUCTIVE: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+const IDEMPOTENT: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const DEFAULT_WRITE: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 export const TOOLS: ToolDefinition[] = [
   {
-    name: "session_start",
+    name: "lemma_session_start",
     description: "Start a traced work session. Records task metadata and returns relevant guides and pre-loaded memories for the task.",
     inputSchema: {
       type: "object",
@@ -41,9 +60,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["task_type"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "The traced session ID." },
+        guides: { type: "array", items: { type: "string" }, description: "Guide names returned as relevant for the task." },
+        preloaded_memories: { type: "array", items: { type: "string" }, description: "Memory fragment IDs pre-loaded into context." },
+      },
+    },
   },
   {
-    name: "session_end",
+    name: "lemma_session_end",
     description: "End the current traced session. Records outcome, updates guide success/failure tracking, and generates improvement suggestions if patterns are detected.",
     inputSchema: {
       type: "object",
@@ -65,9 +93,17 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["outcome"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        outcome_recorded: { type: "boolean", description: "Whether the outcome was recorded." },
+        suggestions: { type: "array", items: { type: "string" }, description: "Generated improvement suggestions." },
+      },
+    },
   },
   {
-    name: "session_attempt",
+    name: "lemma_session_attempt",
     description: "Record a reasoning attempt during the current task — what you tried, why, and the outcome. Captures the reasoning journey (tried/rejected hypotheses) so future sessions don't repeat dead ends. Call whenever an approach is abandoned or only partially tried. Outcome 'rejected' is the MOST valuable (it prevents repeating a dead end).",
     inputSchema: {
       type: "object",
@@ -96,9 +132,17 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["approach", "outcome"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        recorded: { type: "boolean", description: "Whether the attempt was recorded." },
+        attempt_id: { type: "string", description: "ID assigned to the recorded attempt." },
+      },
+    },
   },
   {
-    name: "suggestion_respond",
+    name: "lemma_suggestion_respond",
     description: "Respond to a surfaced improvement suggestion — accept it as useful or dismiss it as irrelevant. Resolves the suggestion so it stops being surfaced at session_start and teaches Lemma your preferences. Call when a suggestion is no longer relevant or you've acted on it.",
     inputSchema: {
       type: "object",
@@ -115,9 +159,17 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["id", "action"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        resolved: { type: "boolean", description: "Whether the suggestion was resolved." },
+        id: { type: "number", description: "The suggestion ID that was resolved." },
+      },
+    },
   },
   {
-    name: "memory_read",
+    name: "lemma_memory_read",
     description: "Read memory fragments. SUMMARY MODE: Shows title + description only (not full content). Use id parameter to get full detail of a specific fragment. Use all=true to see fragments from all projects.",
     inputSchema: {
       type: "object",
@@ -159,11 +211,34 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "ISO date string (e.g., '2026-04-30'). Only return fragments created on or before this date. Optional.",
         },
+        limit: {
+          type: "number",
+          description: "Max fragments to return per page (default 30, max 100). Only applies in browse/search mode, not for id/ids. Optional.",
+        },
+        offset: {
+          type: "number",
+          description: "Number of fragments to skip for pagination (default 0). Use next_offset from the previous response to fetch the next page. Optional.",
+        },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        count: { type: "number", description: "Number of fragments returned in this response." },
+        fragments: { type: "array", items: { type: "object" }, description: "Matching memory fragments (summary fields, or full content for id/ids)." },
+        has_more: { type: "boolean", description: "Whether more results are available beyond this page." },
+        next_offset: { type: "number", description: "Offset to pass for the next page, if has_more is true." },
       },
     },
   },
   {
-    name: "memory_add",
+    name: "lemma_memory_add",
     description:
       "MANDATORY: Call this AFTER completing analysis/research to save findings. Synthesize information into short, reusable fragments.\n\nFRAGMENT SCHEMA — always follow this structure:\n## [Topic Title]\n\n### Context\n[1-2 sentences: what and why it matters]\n\n### [Content Section]\n- [Key fact 1]\n- [Key fact 2]\n\n### Rules (optional, for patterns/warnings)\n- [Absolute constraint]\n\nRULES:\n- ALWAYS store fragments in ENGLISH regardless of conversation language. This ensures search and retrieval works correctly.\n- Title: max 80 chars, start with topic name\n- Fragment: 30-2000 chars, structured markdown, NOT plain prose\n- Every fragment MUST have a ## heading and at least one ### section\n- Type: Choose based on nature:\n  * fact = technical info, API behavior, version details\n  * pattern = repeated solution, best practice, code pattern\n  * lesson = learned from experience, mistake, debugging insight\n  * warning = caution, gotcha, pitfall to avoid\n  * context = environment info, project setup, dependencies\n- Auto-title: If you omit title, first 40 chars of fragment used\n- Auto-description: First sentence extracted from fragment",
     inputSchema: {
@@ -204,9 +279,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["fragment"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the fragment was stored." },
+        id: { type: "string", description: "ID of the newly stored fragment." },
+        conflicts: { type: "array", items: { type: "object" }, description: "Detected conflicts against existing fragments, if any." },
+      },
+      required: ["success", "id"],
+    },
   },
   {
-    name: "memory_update",
+    name: "lemma_memory_update",
     description: "Update an existing memory fragment by ID. Can update title, fragment text, confidence, or all.",
     inputSchema: {
       type: "object",
@@ -230,9 +315,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["id"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the fragment was updated." },
+        id: { type: "string", description: "ID of the updated fragment." },
+      },
+      required: ["success", "id"],
+    },
   },
   {
-    name: "memory_forget",
+    name: "lemma_memory_forget",
     description: "Remove a memory fragment by ID.",
     inputSchema: {
       type: "object",
@@ -244,9 +338,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["id"],
     },
+    annotations: DESTRUCTIVE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the fragment was removed." },
+        id: { type: "string", description: "ID of the removed fragment." },
+      },
+      required: ["success", "id"],
+    },
   },
   {
-    name: "memory_feedback",
+    name: "lemma_memory_feedback",
     description: "Provide feedback on a memory fragment after use. positive = the memory was useful (boosts confidence), negative = it was not helpful (reduces confidence by -0.1).",
     inputSchema: {
       type: "object",
@@ -262,9 +365,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["id", "useful"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether feedback was applied." },
+        id: { type: "string", description: "ID of the fragment receiving feedback." },
+        confidence: { type: "number", description: "The fragment's updated confidence (0-1)." },
+      },
+      required: ["success", "id"],
+    },
   },
   {
-    name: "memory_merge",
+    name: "lemma_memory_merge",
     description: "Merge multiple memory fragments into one. You decide the merged content, this tool just executes the merge. Use when you find related/overlapping fragments that should be consolidated.",
     inputSchema: {
       type: "object",
@@ -290,9 +403,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["ids", "title", "fragment"],
     },
+    annotations: DESTRUCTIVE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the merge succeeded." },
+        id: { type: "string", description: "ID of the new merged fragment." },
+        merged_ids: { type: "array", items: { type: "string" }, description: "IDs of the source fragments that were deleted." },
+      },
+      required: ["success", "id"],
+    },
   },
   {
-    name: "memory_relate",
+    name: "lemma_memory_relate",
     description:
       "Create a typed relation between two memory fragments. Bidirectional — reverse relation auto-created.\n\nRELATION TYPES — when to use each:\n- supports: Fragment A reinforces/validates Fragment B\n- contradicts: Fragment A contradicts/invalidates Fragment B\n- supersedes: Fragment A is newer and replaces Fragment B\n- related_to: General connection between fragments\n\nWHEN TO CALL:\n- After memory_add if you know this relates to an existing fragment\n- After memory_update if content changed significantly\n- After discovering two fragments are connected during analysis",
     inputSchema: {
@@ -318,9 +441,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["sourceId", "targetId", "type"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the relation was created." },
+        relation: { type: "string", description: "The relation type that was created (bidirectional auto-reverse applied)." },
+      },
+      required: ["success"],
+    },
   },
   {
-    name: "memory_stats",
+    name: "lemma_memory_stats",
     description: "Get memory store statistics: fragment counts, average confidence, project breakdown, and health metrics.",
     inputSchema: {
       type: "object",
@@ -329,19 +461,48 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Project name to filter stats (optional, defaults to all projects)",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        total: { type: "number", description: "Total fragment count." },
+        by_type: { type: "object", description: "Fragment counts grouped by type (fact/pattern/lesson/warning/context)." },
+        avg_confidence: { type: "number", description: "Average confidence across fragments (0-1)." },
+      },
+      required: ["total"],
+    },
+  },
+  {
+    name: "lemma_memory_audit",
+    description: "Audit memory store for integrity issues: orphan references, duplicate IDs, confidence anomalies.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        issues: { type: "array", items: { type: "object" }, description: "Detected integrity issues (orphans, duplicates, anomalies)." },
+        orphan_count: { type: "number", description: "Number of orphaned references found." },
       },
     },
   },
   {
-    name: "memory_audit",
-    description: "Audit memory store for integrity issues: orphan references, duplicate IDs, confidence anomalies.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "guide_get",
+    name: "lemma_guide_get",
     description: "Get guides with usage statistics. Returns guides sorted by usage count (most used first). Use task parameter to get suggestions based on a task description.",
     inputSchema: {
       type: "object",
@@ -358,11 +519,25 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Task description to get relevant guide suggestions (e.g., 'react component with hooks', 'nodejs api'). Optional.",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
       },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        count: { type: "number", description: "Number of guides returned." },
+        guides: { type: "array", items: { type: "object" }, description: "Guides with usage statistics (sorted by usage count)." },
+      },
+      required: ["count"],
     },
   },
   {
-    name: "guide_practice",
+    name: "lemma_guide_practice",
     description:
       "MANDATORY: Record guide usage - increments usage count, updates last_used date, and adds contexts/learnings. Call this when you use a guide during work.\n\nTEMPLATE:\n- guide: technology/method name (e.g., \"react\", \"git\", \"seo\")\n- category: web-frontend | web-backend | dev-tool | programming-language | data-storage | ...\n- contexts: WHERE you used it (e.g., [\"hooks\", \"state\", \"effects\"])\n- learnings: WHAT you discovered (e.g., [\"useCallback prevents re-renders\"])\n\nIf guide doesn't exist, it will be auto-created.\nCall this AFTER applying knowledge from a guide or memory fragment.",
     inputSchema: {
@@ -398,9 +573,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["guide", "category", "contexts", "learnings"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether guide usage was recorded." },
+        guide: { type: "string", description: "Name of the guide practiced." },
+        usage_count: { type: "number", description: "The guide's updated usage count." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "guide_create",
+    name: "lemma_guide_create",
     description: "Definition mode: Create a new guide with a detailed manual, mission, and protocols. Use this to establish a reusable framework for a specific technology or methodology.",
     inputSchema: {
       type: "object",
@@ -430,9 +615,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["guide", "category", "description"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the guide was created." },
+        guide: { type: "string", description: "Name of the created guide." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "guide_distill",
+    name: "lemma_guide_distill",
     description:
       "Transform a memory fragment (static fact) into a guide's learning (procedural knowledge). Use this when a learned piece of information should become part of a permanent capability.\n\nWHEN TO CALL: After memory_add with type=\"pattern\" or type=\"lesson\". These fragment types represent reusable knowledge that should be promoted to a guide.\n\nTEMPLATE:\n- memory_id: The fragment ID to distill (e.g., \"m2a5d0cde45ce\")\n- guide: Target guide name — use technology name (e.g., \"react\", \"git\")\n- category: Required only if creating a new guide\n\nThe memory and guide will be bidirectionally linked automatically.",
     inputSchema: {
@@ -453,9 +647,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["memory_id", "guide"],
     },
+    annotations: DEFAULT_WRITE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the learning was distilled into the guide." },
+        guide: { type: "string", description: "Target guide name." },
+        memory_id: { type: "string", description: "Source fragment ID that was distilled." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "guide_update",
+    name: "lemma_guide_update",
     description: "Update an existing guide's basic properties (name, category, description).",
     inputSchema: {
       type: "object",
@@ -497,9 +701,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["guide"],
     },
+    annotations: IDEMPOTENT,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the guide was updated." },
+        guide: { type: "string", description: "Name of the updated guide." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "guide_forget",
+    name: "lemma_guide_forget",
     description: "Remove a guide from the persistent database.",
     inputSchema: {
       type: "object",
@@ -511,9 +724,18 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["guide"],
     },
+    annotations: DESTRUCTIVE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the guide was removed." },
+        guide: { type: "string", description: "Name of the removed guide." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "guide_merge",
+    name: "lemma_guide_merge",
     description: "Merge multiple guides into one. You decide the merged content (description, contexts, learnings). Usage counts are summed. Use when you find overlapping guides that should be consolidated.",
     inputSchema: {
       type: "object",
@@ -548,9 +770,19 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["guides", "guide", "category"],
     },
+    annotations: DESTRUCTIVE,
+    outputSchema: {
+      type: "object",
+      properties: {
+        success: { type: "boolean", description: "Whether the merge succeeded." },
+        guide: { type: "string", description: "Name of the new merged guide." },
+        merged: { type: "array", items: { type: "string" }, description: "Names of the source guides that were deleted." },
+      },
+      required: ["success", "guide"],
+    },
   },
   {
-    name: "memory_library",
+    name: "lemma_memory_library",
     description: `Library Mode: Analyze and organize your entire memory database. Returns a comprehensive snapshot with all fragments, guides, relations, pre-computed analysis signals (stale, duplicate, orphan detection), and suggested actions. After reviewing the snapshot, use other tools (memory_merge, memory_forget, memory_update, guide_distill, memory_relate) to execute organizational changes.\n\nWHEN TO CALL:\n- Periodically to maintain a clean, well-organized knowledge base\n- When memory feels cluttered or redundant\n- After a long project with many fragments added\n- To find distill candidates that haven't been promoted to guides`,
     inputSchema: {
       type: "object",
@@ -564,11 +796,35 @@ export const TOOLS: ToolDefinition[] = [
           enum: ["full", "stale", "duplicates", "orphans", "distill", "guides"],
           description: "Focus area. 'full' = complete snapshot (default). Other values return only relevant sections.",
         },
+        limit: {
+          type: "number",
+          description: "Max fragments to return per page (default 50, max 200). Optional.",
+        },
+        offset: {
+          type: "number",
+          description: "Number of fragments to skip for pagination (default 0). Optional.",
+        },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        fragments: { type: "array", items: { type: "object" }, description: "Memory fragments in the snapshot." },
+        guides: { type: "array", items: { type: "object" }, description: "Guides in the snapshot." },
+        signals: { type: "object", description: "Pre-computed analysis signals (stale, duplicate, orphan detection)." },
+        actions: { type: "array", items: { type: "object" }, description: "Suggested organizational actions." },
+        has_more: { type: "boolean", description: "Whether more fragments are available beyond this page." },
       },
     },
   },
   {
-    name: "session_stats",
+    name: "lemma_session_stats",
     description: "Get virtual session statistics: recent tool usage patterns, technologies encountered, and memory activity.",
     inputSchema: {
       type: "object",
@@ -577,11 +833,24 @@ export const TOOLS: ToolDefinition[] = [
           type: "number",
           description: "Number of recent sessions to analyze (default 10)",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        sessions: { type: "array", items: { type: "object" }, description: "Recent traced sessions." },
+        technologies: { type: "array", items: { type: "string" }, description: "Technologies encountered across recent sessions." },
       },
     },
   },
   {
-    name: "conflict_scan",
+    name: "lemma_conflict_scan",
     description: "Scan memories for contradictions. Detects opposing sentiments, negation conflicts, and contradicting claims across the knowledge base. Returns pairs of conflicting memories with overlap scores.",
     inputSchema: {
       type: "object",
@@ -590,11 +859,25 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Filter to a specific project. Omit to scan all memories.",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
       },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        conflicts: { type: "array", items: { type: "object" }, description: "Pairs of conflicting fragments with overlap scores." },
+        count: { type: "number", description: "Number of conflicts detected." },
+      },
+      required: ["count"],
     },
   },
   {
-    name: "proactive_analysis",
+    name: "lemma_proactive_analysis",
     description: "Run proactive intelligence analysis on the knowledge base. Detects recurring patterns, suggests guide distillation, identifies stale/isolated memories, and recommends cleanup actions. This is the autonomous intelligence layer.",
     inputSchema: {
       type: "object",
@@ -603,11 +886,25 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Filter to a specific project. Omit to analyze all.",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
       },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        suggestions: { type: "array", items: { type: "object" }, description: "Proactive intelligence suggestions (distill, merge, refine, cleanup)." },
+        count: { type: "number", description: "Number of suggestions generated." },
+      },
+      required: ["count"],
     },
   },
   {
-    name: "project_analytics",
+    name: "lemma_project_analytics",
     description: "Get cross-session analytics for a project. Tracks knowledge growth rate, skill evolution, session outcomes, and overall project health. Shows how the AI's understanding of a project has evolved over time.",
     inputSchema: {
       type: "object",
@@ -616,11 +913,25 @@ export const TOOLS: ToolDefinition[] = [
           type: "string",
           description: "Project name to analyze. Omit to see all projects overview.",
         },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
+        },
+      },
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project name (or overview if omitted)." },
+        health_score: { type: "number", description: "Overall project health score (0-1)." },
+        insights: { type: "array", items: { type: "object" }, description: "Knowledge growth, skill evolution, and session outcome insights." },
       },
     },
   },
   {
-    name: "semantic_search",
+    name: "lemma_semantic_search",
     description: "Search memories using TF-IDF semantic similarity. Finds related memories even when different words are used. Unlike FTS5 keyword search, this understands topic similarity. Use when keyword search fails to find related knowledge.",
     inputSchema: {
       type: "object",
@@ -635,10 +946,29 @@ export const TOOLS: ToolDefinition[] = [
         },
         topK: {
           type: "number",
-          description: "Maximum results to return (default 10, max 30).",
+          description: "Maximum results to return per page (default 10, max 30).",
+        },
+        offset: {
+          type: "number",
+          description: "Number of results to skip for pagination (default 0). Use next_offset from the previous response to fetch the next page. Optional.",
+        },
+        response_format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "Response format: 'markdown' (default, human-readable) or 'json' (machine-readable structured payload). Optional.",
         },
       },
       required: ["query"],
+    },
+    annotations: READ_ONLY,
+    outputSchema: {
+      type: "object",
+      properties: {
+        results: { type: "array", items: { type: "object" }, description: "Semantically similar fragments with similarity scores." },
+        count: { type: "number", description: "Number of results returned." },
+        has_more: { type: "boolean", description: "Whether more results are available beyond this page." },
+      },
+      required: ["count"],
     },
   },
 ];

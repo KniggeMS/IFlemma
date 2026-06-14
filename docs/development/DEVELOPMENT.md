@@ -75,7 +75,7 @@ tests/                    # 614 tests, node:test + tsx
 
 All data is stored in a single SQLite database (`~/.lemma/lemma.db`) with WAL mode, statement caching, and FTS5 full-text search. Legacy JSONL files are automatically migrated on first run.
 
-Key tables: `memories`, `guides`, `sessions`, `relations`, `guide_learnings`, `guide_memory_links`, `memory_vectors` (placeholder for future vector search).
+Key tables: `memories`, `guides`, `sessions`, `relations`, `guide_learnings`, `guide_memory_links`. Semantic search runs over TF-IDF vectors computed in-process (no vector table).
 
 ### Memory Injection
 
@@ -102,10 +102,10 @@ The prompt layer teaches the LLM:
 
 The `src/intelligence/` module provides autonomous background intelligence:
 
-- **Conflict Detection** (`conflict.ts`): Negation pattern matching + topic overlap scoring. Runs automatically on every `memory_add`. Full scans available via `conflict_scan` tool.
-- **Proactive Suggestions** (`proactive.ts`): Detects recurring patterns, distill candidates, stale memories, low-performing guides. Runs automatically after `memory_add` and `guide_practice`. Full analysis via `proactive_analysis` tool.
-- **Project Analytics** (`session-analytics.ts`): Cross-session health scoring, knowledge growth rate, skill coverage trends. Via `project_analytics` tool.
-- **Semantic Search** (`semantic.ts`): TF-IDF vector space model with cosine similarity. Via `semantic_search` tool.
+- **Conflict Detection** (`conflict.ts`): Negation pattern matching + topic overlap scoring. Runs automatically on every `lemma_memory_add`. Full scans available via `lemma_conflict_scan` tool.
+- **Proactive Suggestions** (`proactive.ts`): Detects recurring patterns, distill candidates, stale memories, low-performing guides. Runs automatically after `lemma_memory_add` and `lemma_guide_practice`. Full analysis via `lemma_proactive_analysis` tool.
+- **Project Analytics** (`session-analytics.ts`): Cross-session health scoring, knowledge growth rate, skill coverage trends. Via `lemma_project_analytics` tool.
+- **Semantic Search** (`semantic.ts`): TF-IDF vector space model with cosine similarity. Via `lemma_semantic_search` tool.
 
 ### Memory Lifecycle
 
@@ -117,7 +117,7 @@ The `src/intelligence/` module provides autonomous background intelligence:
 
 ### Virtual Sessions
 
-Automatic session correlation without explicit `session_start`/`session_end`:
+Automatic session correlation without explicit `lemma_session_start`/`lemma_session_end`:
 
 - Auto-starts on first tool call
 - Idle detection: 10s mark → finalize on next call if >30s idle
@@ -128,9 +128,9 @@ Automatic session correlation without explicit `session_start`/`session_end`:
 ### Response Hooks
 
 Tool responses include contextual `SUGGESTED ACTIONS`:
-- Topic overlap → `memory_relate`
-- Type `pattern`/`lesson` → `guide_distill`
-- Conflict detected → `memory_relate` with `contradicts`
+- Topic overlap → `lemma_memory_relate`
+- Type `pattern`/`lesson` → `lemma_guide_distill`
+- Conflict detected → `lemma_memory_relate` with `contradicts`
 - Proactive suggestions → distill, merge, refine actions
 - Session end → full review with relate + distill + practice suggestions
 
@@ -173,7 +173,7 @@ npm run test:server                         # Server tests only
 
 ## Adding New Features
 
-New tools can be added as needed. The current tool count is 26 (24 core memory/guide/session tools + `session_attempt` and `suggestion_respond` for the reasoning-continuity self-critique loop). See [ROADMAP.md](./ROADMAP.md) for planned features and [HANDLERS-REFACTOR.md](./HANDLERS-REFACTOR.md) for the ongoing targeted SQL migration.
+New tools can be added as needed. The current tool count is 26 (24 core memory/guide/session tools + `lemma_session_attempt` and `lemma_suggestion_respond` for the reasoning-continuity self-critique loop). See [ROADMAP.md](./ROADMAP.md) for planned features and [HANDLERS-REFACTOR.md](./HANDLERS-REFACTOR.md) for the ongoing targeted SQL migration.
 
 ## Dependencies
 
@@ -181,4 +181,3 @@ New tools can be added as needed. The current tool count is 26 (24 core memory/g
 |---------|------|---------|
 | `@modelcontextprotocol/sdk` | required | MCP protocol |
 | `better-sqlite3` | required | SQLite database |
-| `sqlite-vec` | required | Vector extension (placeholder for future use) |

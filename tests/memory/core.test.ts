@@ -116,56 +116,6 @@ describe("Memory Core", () => {
     });
   });
 
-  describe("decayConfidence", () => {
-    test("reduces confidence for unused fragments (accessed=0)", () => {
-      const frag: MemoryFragment = { ...core.createFragment("test", "ai"), accessed: 0 };
-      const [decayed]: MemoryFragment[] = core.decayConfidence([frag]);
-      assert.ok(decayed.confidence < frag.confidence);
-      assert.ok(Math.abs(decayed.confidence - (frag.confidence - 0.002)) < 0.001);
-    });
-
-    test("does not decay fragments with accessed > 0 (shield)", () => {
-      const frag: MemoryFragment = { ...core.createFragment("test", "ai"), confidence: 0.8, accessed: 3 };
-      const [decayed]: MemoryFragment[] = core.decayConfidence([frag]);
-      assert.equal(decayed.confidence, 0.8, "accessed>0 fragments should not decay");
-    });
-
-    test("resets accessed counter after decay", () => {
-      const frag: MemoryFragment = { ...core.createFragment("test", "ai"), accessed: 5 };
-      const [decayed]: MemoryFragment[] = core.decayConfidence([frag]);
-      assert.equal(decayed.accessed, 0);
-    });
-
-    test("never removes fragments, only reduces confidence", () => {
-      const frags: MemoryFragment[] = [core.createFragment("a", "ai"), core.createFragment("b", "ai")];
-      const decayed: MemoryFragment[] = core.decayConfidence(frags);
-      assert.equal(decayed.length, 2);
-    });
-
-    test("confidence never goes below 0", () => {
-      const frag: MemoryFragment = { ...core.createFragment("test", "ai"), confidence: 0.01, accessed: 0 };
-      const [decayed]: MemoryFragment[] = core.decayConfidence([frag]);
-      assert.ok(decayed.confidence >= 0);
-    });
-
-    test("negative hits do not affect decay rate", () => {
-      const normal: MemoryFragment = { ...core.createFragment("normal", "ai"), accessed: 0, negativeHits: 0 };
-      const hated: MemoryFragment = { ...core.createFragment("hated", "ai"), accessed: 0, negativeHits: 5 };
-
-      const [decayedNormal]: MemoryFragment[] = core.decayConfidence([normal]);
-      const [decayedHated]: MemoryFragment[] = core.decayConfidence([hated]);
-
-      assert.equal(decayedNormal.confidence, decayedHated.confidence,
-        "negativeHits should not affect decay rate");
-    });
-
-    test("resets negativeHits after decay", () => {
-      const frag: MemoryFragment = { ...core.createFragment("test", "ai"), accessed: 0, negativeHits: 3 };
-      const [decayed]: MemoryFragment[] = core.decayConfidence([frag]);
-      assert.equal(decayed.negativeHits, 0);
-    });
-  });
-
   describe("boostOnAccess", () => {
     test("increases confidence by 0.015", () => {
       const frag: MemoryFragment = { ...core.createFragment("test", "ai"), confidence: 0.5 };
