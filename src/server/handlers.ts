@@ -10,7 +10,7 @@ import { collectLibrarySnapshot, formatLibrarySnapshot } from "../db/library-sto
 import * as intel from "../intelligence/index.js";
 import { redactSecrets } from "../memory/privacy.js";
 import { loadConfig, estimateTokens } from "../memory/config.js";
-import type { FragmentType, Attempt, AttemptOutcome, Session } from "../types.js";
+import type { FragmentType, Attempt, AttemptOutcome, Session, SuggestionStatus } from "../types.js";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -35,6 +35,11 @@ interface SessionAttemptArgs {
   critique?: string;
   rationale?: string;
   related_memory_id?: string;
+}
+
+interface SuggestionRespondArgs {
+  id?: number;
+  action?: string;
 }
 
 interface MemoryReadArgs {
@@ -669,6 +674,48 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
   logger.flow("session_attempt", "recorded", { session_id: sessionId, seq: attempt?.seq, outcome });
   return {
     content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${preview} ${valueTag}.` }],
+  };
+}
+
+export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Promise<ToolResult> {
+  const id = args?.id;
+  const action = args?.action;
+
+  if (id === undefined || action === undefined) {
+    return {
+      content: [{ type: "text", text: "Error: 'id' and 'action' are required for suggestion_respond." }],
+      isError: true,
+    };
+  }
+
+  if (!["accept", "dismiss"].includes(action)) {
+    return {
+      content: [{ type: "text", text: "Error: 'action' must be one of: accept, dismiss." }],
+      isError: true,
+    };
+  }
+
+  logger.flow("suggestion_respond", "start", { id, action });
+
+  // Map the tool's verb to the stored status enum value (accept -> accepted, dismiss -> dismissed).
+  const status: SuggestionStatus = action === "accept" ? "accepted" : "dismissed";
+
+  // Best-effort: a bad/missing id (or DB hiccup) must surface as a clean tool error, mirroring the
+  // best-effort try/catch used by session_attempt's recordAttempt.
+  try {
+    sessions.updateSuggestionStatus(id, status);
+  } catch (err) {
+    logger.warn("suggestion_respond updateSuggestionStatus failed", { error: String(err), id, action });
+    return {
+      content: [{ type: "text", text: "Error: Could not update this suggestion in the store." }],
+      isError: true,
+    };
+  }
+
+  const verb = action === "accept" ? "Accepted" : "Dismissed";
+  logger.flow("suggestion_respond", "complete", { id, action });
+  return {
+    content: [{ type: "text", text: `${verb} suggestion #${id}. It will no longer be surfaced.` }],
   };
 }
 
@@ -2120,6 +2167,11 @@ export async function handleCallTool(request: ToolCallRequest): Promise<ToolResu
       }
       case "session_attempt": {
         const result = await handleSessionAttempt(args as SessionAttemptArgs);
+        logger.response(name, !!result.isError, Date.now() - startTime);
+        return result;
+      }
+      case "suggestion_respond": {
+        const result = await handleSuggestionRespond(args as SuggestionRespondArgs);
         logger.response(name, !!result.isError, Date.now() - startTime);
         return result;
       }

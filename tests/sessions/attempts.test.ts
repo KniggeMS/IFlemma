@@ -14,6 +14,7 @@ import {
   loadRecentAttempts,
   decayAttempts,
   boostAttempt,
+  penalizeAttempt,
   saveImprovementSuggestion,
   loadPendingSuggestions,
   updateSuggestionStatus,
@@ -99,6 +100,20 @@ describe("Attempt persistence", () => {
     const after = getDb().prepareCached("SELECT confidence, access_count FROM session_attempts WHERE approach='boost me'").get() as { confidence: number; access_count: number };
     assert.equal(after.confidence, before.confidence + 0.015);
     assert.equal(after.access_count, before.access_count + 1);
+  });
+
+  test("penalizeAttempt lowers confidence (floored at 0) and bumps access_count", () => {
+    const s = createSession("debugging");
+    recordAttempt(s.session_id, { approach: "penalize me", outcome: "rejected", critique: "c" });
+    const before = getDb().prepareCached("SELECT confidence, access_count FROM session_attempts WHERE approach='penalize me'").get() as { confidence: number; access_count: number };
+    penalizeAttempt(s.session_id, 1, 0.02);
+    const after = getDb().prepareCached("SELECT confidence, access_count FROM session_attempts WHERE approach='penalize me'").get() as { confidence: number; access_count: number };
+    assert.equal(after.confidence, before.confidence - 0.02);
+    assert.equal(after.access_count, before.access_count + 1);
+    // Force the floor at 0.
+    for (let i = 0; i < 500; i++) penalizeAttempt(s.session_id, 1, 0.02);
+    const floored = getDb().prepareCached("SELECT confidence FROM session_attempts WHERE approach='penalize me'").get() as { confidence: number };
+    assert.equal(floored.confidence, 0);
   });
 
   test("attempts cascade-delete when session is deleted", () => {

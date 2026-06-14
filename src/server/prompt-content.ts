@@ -47,6 +47,7 @@ export const TOOL_NUDGES: Record<string, string> = {
   memory_feedback: "Give 👍 after a useful memory to boost its ranking.",
   session_end: "Call when done — record outcome (success/partial/failure) + lessons.",
   session_attempt: "⚠️ Record abandoned/partial approaches — dead ends are the MOST valuable memory (prevents repeating them).",
+  suggestion_respond: "Respond to surfaced improvement suggestions — dismiss if not relevant, accept if useful (so Lemma learns your preferences).",
   guide_distill: "Promote a proven pattern/lesson into a reusable guide.",
   guide_practice: "⚠️ Always record each guide use + outcome here — it trains the guide.",
   memory_library: "User -lib -> full knowledge-base snapshot + maintenance signals.",

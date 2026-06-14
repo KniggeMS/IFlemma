@@ -98,6 +98,25 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "suggestion_respond",
+    description: "Respond to a surfaced improvement suggestion — accept it as useful or dismiss it as irrelevant. Resolves the suggestion so it stops being surfaced at session_start and teaches Lemma your preferences. Call when a suggestion is no longer relevant or you've acted on it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "number",
+          description: "The id of the improvement suggestion to respond to (as surfaced at session_start).",
+        },
+        action: {
+          type: "string",
+          enum: ["accept", "dismiss"],
+          description: "'accept' = the suggestion was useful (reinforces it). 'dismiss' = not relevant (stops surfacing it).",
+        },
+      },
+      required: ["id", "action"],
+    },
+  },
+  {
     name: "memory_read",
     description: "Read memory fragments. SUMMARY MODE: Shows title + description only (not full content). Use id parameter to get full detail of a specific fragment. Use all=true to see fragments from all projects.",
     inputSchema: {

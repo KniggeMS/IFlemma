@@ -431,6 +431,15 @@ export function boostAttempt(sessionId: string, seq: number, delta: number): voi
   ).run(delta, sessionId, seq);
 }
 
+export function penalizeAttempt(sessionId: string, seq: number, delta: number): void {
+  const db = getDb();
+  db.prepareCached(
+    `UPDATE session_attempts
+     SET confidence = MAX(0, confidence - ?), access_count = access_count + 1, last_accessed_at = datetime('now')
+     WHERE session_id = ? AND seq = ?`
+  ).run(delta, sessionId, seq);
+}
+
 function rowToSuggestion(row: Record<string, unknown>): ImprovementSuggestion {
   return {
     id: row.id as number,

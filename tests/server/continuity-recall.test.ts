@@ -193,3 +193,54 @@ describe("attempt decay on session_start", () => {
     assert.ok(before.confidence - after.confidence <= 0.0021);
   });
 });
+
+describe("suggestion_respond (accept/dismiss)", () => {
+  test("dismiss moves a suggestion out of pending and stops surfacing it", async () => {
+    // Seed a pending suggestion via the low-success path (4 failing sessions).
+    for (let i = 0; i < 4; i++) {
+      await handleSessionStart({ task_type: "implementation", technologies: ["react"] });
+      await handleGuidePractice({ guide: "react", category: "web-frontend", contexts: ["x"], learnings: ["y"], outcome: "failure" });
+      await handleSessionEnd({ outcome: "failure" });
+    }
+    const { loadPendingSuggestions } = await import("../../src/sessions/index.js");
+    const pending = loadPendingSuggestions();
+    assert.ok(pending.length >= 1);
+    const id = pending[0].id;
+
+    // Import the new handler under test.
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    const res = await handleSuggestionRespond({ id, action: "dismiss" });
+    assert.equal(res.isError, undefined);
+    // No longer pending.
+    assert.equal(loadPendingSuggestions().filter(s => s.id === id).length, 0);
+  });
+
+  test("accept sets resolved_at and clears from pending", async () => {
+    const { saveImprovementSuggestion, loadPendingSuggestions, loadSessions, findActiveSession } = await import("../../src/sessions/index.js");
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    await handleSessionStart({ task_type: "implementation" });
+    const active = findActiveSession(loadSessions());
+    assert.ok(active, "expected an active session after handleSessionStart");
+    const id = saveImprovementSuggestion(active!.session_id, "tip");
+    const res = await handleSuggestionRespond({ id, action: "accept" });
+    assert.equal(res.isError, undefined);
+    assert.equal(loadPendingSuggestions().filter(s => s.id === id).length, 0);
+    const row = getDb().prepareCached("SELECT status, resolved_at FROM improvement_suggestions WHERE id = ?").get(id) as { status: string; resolved_at: string | null };
+    assert.equal(row.status, "accepted");
+    assert.ok(row.resolved_at);
+  });
+
+  test("rejects an invalid action with a helpful error", async () => {
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    const res = await handleSuggestionRespond({ id: 999, action: "maybe" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /must be one of/i);
+  });
+
+  test("requires id and action", async () => {
+    const { handleSuggestionRespond } = await import("../../src/server/handlers.js");
+    const res = await handleSuggestionRespond({ action: "dismiss" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /required/i);
+  });
+});

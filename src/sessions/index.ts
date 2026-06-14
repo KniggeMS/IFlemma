@@ -17,6 +17,7 @@ export {
   loadRecentAttempts,
   decayAttempts,
   boostAttempt,
+  penalizeAttempt,
   saveImprovementSuggestion,
   loadPendingSuggestions,
   updateSuggestionStatus,
