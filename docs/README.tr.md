@@ -65,7 +65,7 @@ Lemma arka planda zeka çalıştırır — manuel tetiklemeye gerek yoktur:
 
 Manuel derin analiz de özel araçlarla kullanılabilir.
 
-## Araçlar (25)
+## Araçlar (26)
 
 ### Bellek (11)
 
@@ -94,7 +94,7 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `guide_forget` | Rehber sil |
 | `guide_merge` | Rehberleri birleştir, kaynak bellekleri aktar |
 
-### Oturumlar (4)
+### Oturumlar (5)
 
 | Araç | Açıklama |
 |------|----------|
@@ -102,6 +102,7 @@ Manuel derin analiz de özel araçlarla kullanılabilir.
 | `session_attempt` | Denenen bir yaklaşımı kaydet (reddedilen/kısmi/umut verici) — çıkmaz sokaklar değerli bellektir |
 | `session_end` | İnceleme, otomatik bağlama ve önerilerle oturumu sonlandır |
 | `session_stats` | Sanal oturum istatistikleri |
+| `suggestion_respond` | Sunulan iyileştirme önerisini kabul et veya reddet (Lemma tercihlerini öğrenir) |
 
 ### Zeka (4)
 

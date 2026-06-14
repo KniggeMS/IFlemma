@@ -77,7 +77,7 @@ Lemma runs intelligence in the background — no manual triggering needed:
 
 Manual deep analysis is also available via dedicated tools.
 
-## Tools (25)
+## Tools (26)
 
 ### Memory (11)
 
@@ -106,7 +106,7 @@ Manual deep analysis is also available via dedicated tools.
 | `guide_forget` | Remove guide |
 | `guide_merge` | Merge guides, inherit source memories |
 
-### Sessions (4)
+### Sessions (5)
 
 | Tool | Purpose |
 |------|---------|
@@ -114,6 +114,7 @@ Manual deep analysis is also available via dedicated tools.
 | `session_attempt` | Record a tried approach (rejected/partial/promising) — dead ends are valuable memory |
 | `session_end` | End session with review, auto-linking, and suggestions |
 | `session_stats` | Virtual session statistics |
+| `suggestion_respond` | Accept or dismiss a surfaced improvement suggestion (teaches Lemma your preferences) |
 
 ### Intelligence (4)
 

@@ -77,7 +77,7 @@ try {
 
   // --- 2. tools/list channel ---
   const { tools } = await client.listTools();
-  check("25 tools returned", tools.length === 25, `got ${tools.length}`);
+  check("26 tools returned", tools.length === 26, `got ${tools.length}`);
   const memRead = tools.find((t) => t.name === "memory_read");
   const memAdd = tools.find((t) => t.name === "memory_add");
   const sessStart = tools.find((t) => t.name === "session_start");

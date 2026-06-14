@@ -124,7 +124,7 @@ describe("buildInjectedTools", () => {
   test("returns array of tools with same count as original", async () => {
     const result = await buildInjectedTools(null);
     assert.ok(Array.isArray(result));
-    assert.strictEqual(result.length, 25, `Expected 25 tools, got ${result.length}`);
+    assert.strictEqual(result.length, 26, `Expected 26 tools, got ${result.length}`);
     const names = result.map(t => t.name);
     assert.ok(names.includes("memory_read"));
     assert.ok(names.includes("memory_add"));
