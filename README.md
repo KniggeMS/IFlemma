@@ -50,7 +50,7 @@ lemma -vis -p 8080  # Visualizer on custom port (default: 3456)
 
 **Library Mode** (`-lib`) outputs a full analysis of all memories, guides, relations, stale fragments, distill candidates, and suggested actions. Useful for periodic maintenance and review.
 
-**Visualizer** (`-vis`) starts a local HTTP server and opens an interactive D3.js force-directed graph of your memory fragments in the browser. Nodes represent memories (sized by confidence + access count, colored by type). Links show relations and associations. All changes (edit, delete, link, unlink) write directly to the SQLite database in real-time. Cross-platform: works on macOS, Linux, and Windows.
+**Visualizer** (`-vis`) starts a localhost-only HTTP server (token-authenticated) and opens an interactive D3.js force-directed graph of your memory fragments in the browser. Nodes represent memories (sized by confidence + access count, colored by type). Links show relations and associations. All changes (edit, delete, link, unlink) write directly to the SQLite database in real-time. Cross-platform: works on macOS, Linux, and Windows.
 
 ## How It Works
 
@@ -65,7 +65,7 @@ Memories are injected into tool descriptions via `tools/list`. The LLM starts ev
 
 **Knowledge pipeline:** Memory (what you know, `memory_add`) → Pattern (`type: "pattern"`) → Guide (how you work, `guide_distill` → `guide_practice`)
 
-**AGENTS.md injection:** Lemma automatically injects a system prompt into your project's `AGENTS.md`, teaching the LLM how to use the memory system effectively. This ensures consistent behavior across all MCP clients.
+**No project-file modification:** Lemma injects memory through the MCP prompt layer — the system prompt and tool descriptions — and never writes to `AGENTS.md` or any project file. This works identically on every MCP client. (Legacy `<!-- lemma:* -->` blocks left by older versions are auto-cleaned on startup.)
 
 ## Autonomous Intelligence
 
@@ -182,7 +182,11 @@ Legacy JSONL files are automatically migrated on first run.
 
 ## Security
 
-All data is stored locally in `~/.lemma/`. Nothing is sent to external servers. Secrets are automatically redacted from memory fragments (17 regex patterns for API keys, tokens, connection strings).
+Lemma is local-first by design:
+
+- **Local storage** — all data stays in `~/.lemma/`; nothing is sent to external servers.
+- **Secret redaction** — secrets are scrubbed from memory fragments AND from traffic logs (17 regex patterns for API keys, tokens, connection strings; position-based so over-redaction and overlap bugs are avoided).
+- **Visualizer hardening** — the visualizer binds `127.0.0.1` only (never `0.0.0.0`), requires an `X-Lemma-Token`, and uses a narrow localhost CORS allow-list (no `Access-Control-Allow-Origin: *`).
 
 ## Documentation
 

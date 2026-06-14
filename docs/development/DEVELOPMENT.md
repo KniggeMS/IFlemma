@@ -54,7 +54,7 @@ src/
 │   ├── tools.ts          # MCP tool definitions (26 tools)
 │   ├── hooks.ts          # Hook system & prompt modifiers
 │   ├── system-prompt.ts  # Dynamic system prompt generation
-│   ├── agents-md.ts      # AGENTS.md injection with Lemma system instructions
+│   ├── agents-md.ts      # Auto-cleans stale Lemma AGENTS.md blocks (legacy); no injection
 │   └── traffic-log.ts    # MCP traffic logging
 ├── sessions/
 │   ├── core.ts           # Formal session lifecycle (session_start/end)
@@ -87,17 +87,16 @@ Memories are injected into MCP tool descriptions at `tools/list` time:
 
 All injection paths use `injectionScore()` ranking: `confidence * 0.7 + recency * 0.3`.
 
-### AGENTS.md Injection
+### Prompt-Layer Injection (no project files)
 
-When a project is detected, Lemma injects a system prompt into the project's `AGENTS.md` file (between `<!-- lemma:start -->` and `<!-- lemma:end -->` markers). This teaches the LLM:
+Memory is injected through the MCP prompt layer only — the dynamic system prompt (`buildInstructions` in `prompt-content.ts`) and behavioral nudges appended to tool descriptions. Lemma does **not** write to `AGENTS.md` or any project file (changed in v0.12.0). `agents-md.ts` now only auto-cleans stale `<!-- lemma:start -->` / `<!-- lemma:end -->` blocks left by older versions on startup.
+
+The prompt layer teaches the LLM:
 - The two-layer knowledge system (memories + guides)
 - The knowledge pipeline (raw → pattern → skill)
 - Mandatory rules (read memory first, save immediately, store in English)
 - Maintenance workflows (update, merge, forget, relate, feedback)
-- Fragment and guide writing guidelines
 - Session management
-
-The injection is idempotent — updating existing content on subsequent starts.
 
 ### Intelligence Layer
 

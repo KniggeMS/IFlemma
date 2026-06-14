@@ -53,7 +53,7 @@ Bellekler `tools/list` üzerinden araç açıklamalarına enjekte edilir. LLM he
 
 **Bilgi hattı:** Memory (ne biliyorsun, `memory_add`) → Pattern (`type: "pattern"`) → Guide (nasıl çalışıyorsun, `guide_distill` → `guide_practice`)
 
-**AGENTS.md enjeksiyonu:** Lemma projenizin `AGENTS.md` dosyasına otomatik olarak bir sistem prompt'u enjekte eder ve LLM'e bellek sistemini nasıl etkili kullanacağını öğretir. Tüm MCP istemcilerinde tutarlı davranış sağlar.
+**Proje dosyasına müdahale yok:** Lemma belleği MCP prompt katmanı (sistem prompt'u ve araç açıklamaları) üzerinden enjekte eder; `AGENTS.md`'ye veya herhangi bir proje dosyasına asla yazmaz. Tüm MCP istemcilerinde aynı çalışır. (Eski sürümlerin bıraktığı `<!-- lemma:* -->` blokları açılışta otomatik temizlenir.)
 
 ## Otonom Zeka
 
@@ -165,7 +165,11 @@ Eski JSONL dosyaları ilk çalıştırmada otomatik olarak taşınır.
 
 ## Güvenlik
 
-Tüm veriler yerel olarak `~/.lemma/` dizininde saklanır. Hiçbir şey harici sunuculara gönderilmez. Gizli bilgiler bellek fragmanlarından otomatik olarak sansürlenir (API anahtarları, tokenlar, bağlantı dizgileri için 17 regex deseni).
+Lemma tasarım gerei yerel-önceliklidir:
+
+- **Yerel depolama** — tüm veriler `~/.lemma/` dizininde kalır; hiçbir şey harici sunuculara gönderilmez.
+- **Gizli bilgi sansürleme** — gizliler bellek fragmanlarından VE traffic log'larından otomatik temizlenir (API anahtarları, tokenlar, bağlantı dizgileri için 17 regex deseni; konum-tabanlı, aşırı-maskeleme ve overlap bug'ı yok).
+- **Visualizer sertleştirme** — visualizer yalnızca `127.0.0.1`'e bağlanır (`0.0.0.0` asla), `X-Lemma-Token` gerektirir ve dar bir localhost CORS allow-list kullanır (`Access-Control-Allow-Origin: *` yok).
 
 ## Dokümantasyon
 
