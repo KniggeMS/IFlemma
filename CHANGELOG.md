@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.14.1] - 2026-06-14
+
+### Fixed
+- **Hotfix: the published package crashed on Node 22+.** `src/version.ts` read `package.json` through a bare ESM import (`import pkg from "../package.json"`). That compiles under `tsc` but throws `ERR_IMPORT_ATTRIBUTE_MISSING` at runtime on Node 22+, because JSON imports there require `with { type: "json" }`. The failure was invisible under `tsx` (used by the test runner) but broke `npx lemma-mcp` outright — every client got `Failed to connect`. Switched to `fs.readFileSync`, which works on every supported Node version. No behavior change beyond that.
+
 ## [0.14.0] - 2026-06-14
 
 ### Added
