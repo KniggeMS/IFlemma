@@ -333,6 +333,7 @@ export async function buildInjectedTools(projectName: string | null): Promise<To
         type: tool.inputSchema.type,
         properties: { ...tool.inputSchema.properties },
         required: tool.inputSchema.required ? [...tool.inputSchema.required] : undefined,
+        additionalProperties: tool.inputSchema.additionalProperties,
       },
       ...(tool.annotations ? { annotations: { ...tool.annotations } } : {}),
       ...(tool.outputSchema ? {

@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.16.0] - 2026-06-16
+
+MCP correctness + project isolation release. All 26 `outputSchema`s now match the actual tool return data (enforced by the SDK under protocol `2025-06-18`), and memory is now isolated per project by default instead of silently leaking global.
+
+### Fixed
+- **`structuredContent` was never populated** (advertised in 0.15.0 but never emitted). `outputSchema` existed on all 26 tools yet handlers returned only text. Under protocol `2025-06-18` this is enforced, so every tool now returns `structuredContent` matching its `outputSchema` — added to ~16 success paths (`session_start/end/attempt`, `suggestion_respond`, `memory_read` batch/single, `memory_add/update/forget/feedback/merge/relate`, `guide_practice/create/distill/update/forget/merge`). `buildResult` (`format.ts`) already mapped `data`→`structuredContent` for the read tools.
+- **6 `outputSchema`/data mismatches that broke tools under SDK validation (`MCP error -32602`):**
+  - `lemma_memory_read`: `next_offset` was `number` but the handler returns `null` on the last page / single-id / batch lookups → `-32602`. Now `["number","null"]`. The batch/single paths also returned `fragments` as a string array; now an object array (`{id}`) to match the schema.
+  - `lemma_memory_stats`: advertised `by_type` (not returned); corrected to the real fields (`by_source`, `by_project`, `low_confidence`, `high_confidence`).
+  - `lemma_memory_audit`: advertised `orphan_count` + `issues:object[]`; corrected to the actual `issues_found` + `issues:string[]` + `healthy` + `total_fragments`.
+  - `lemma_session_stats`: advertised `{sessions, technologies}`; corrected to the real `{active_session, recent_sessions}`.
+  - `lemma_memory_library`: `relations` is an object (graph summary), not an array; `suggestions` items are strings, not objects — both corrected.
+  - `lemma_project_analytics`: advertised fields were absent in overview mode; all fields made optional to reflect the two modes (single-project vs overview).
+- **Project isolation silently broken.** `lemma_memory_add` / `lemma_memory_merge` stored fragments as **global** (`project:null`) when the LLM omitted the `project` arg, so a note saved in project A leaked into project B. Now: explicit `project` wins; omitted → detected project (`basename(cwd)`); explicit `null` forces global. Proven end-to-end across separate server processes sharing one DB.
+
+### Changed
+- **`protocolVersion` bumped `2024-11-05` → `2025-06-18`.** The newer protocol enforces `outputSchema` validation, which surfaced the mismatches above. Backward compatible for well-formed clients.
+- **`additionalProperties: false`** added to all 26 input schemas (strict validation — strict clients reject unknown arguments).
+- **`project` field type** on `lemma_memory_add` / `lemma_memory_merge` changed from `"string"` to `["string","null"]` (JSON Schema type/default consistency).
+
+### Added
+- **Deep MCP flow tests** (`tests/manual/lemma-confirm-test.mjs`, `lemma-deep-test.mjs`, `lemma-inject-test.mjs`): exercise every tool end-to-end, assert `structuredContent` + `outputSchema` key coverage + pagination, and prove project-scoped injection (fresh install → cross-session persistence → isolation) across separate server processes sharing one `~/.lemma` DB.
+
+### Fixed (test/tooling)
+- `tests/manual/mcp-smoke.mjs` still called tools by unprefixed names after the 0.15.0 `lemma_` rename, so `npm run test:mcp` was broken. Updated.
+
 ## [0.15.0] - 2026-06-14
 
 An MCP-effectiveness sprint: tools are now safer and cheaper for agents to use, with no runtime behavior change beyond one bug fix. MCP effectiveness 4.6 → ~7.5/10.

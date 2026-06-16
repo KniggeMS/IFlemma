@@ -518,6 +518,11 @@ export async function handleSessionStart(args?: SessionStartArgs): Promise<ToolR
 
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: {
+      session_id: session.session_id,
+      guides: [...suggestions.relevant, ...suggestions.suggested].map((g: any) => g.guide ?? g.name ?? g).filter(Boolean),
+      preloaded_memories: relevantResults.map((f: any) => f.id),
+    },
   };
 }
 
@@ -683,6 +688,10 @@ export async function handleSessionEnd(args?: SessionEndArgs): Promise<ToolResul
   logger.flow("session_end", "complete", { session_id: session.session_id, outcome, improvement_suggestions: improvementLines.length });
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: {
+      outcome_recorded: true,
+      suggestions: [...improvementLines.map(l => l.trim()), ...reviewSuggestions],
+    },
   };
 }
 
@@ -766,6 +775,10 @@ export async function handleSessionAttempt(args?: SessionAttemptArgs): Promise<T
   logger.flow("session_attempt", "recorded", { session_id: sessionId, seq: attempt?.seq, outcome });
   return {
     content: [{ type: "text", text: `Recorded attempt #${attempt?.seq} — ${preview} ${valueTag}.` }],
+    structuredContent: {
+      recorded: !!attempt,
+      attempt_id: attempt?.seq != null ? `${sessionId}#${attempt.seq}` : "",
+    },
   };
 }
 
@@ -848,6 +861,10 @@ export async function handleSuggestionRespond(args?: SuggestionRespondArgs): Pro
   logger.flow("suggestion_respond", "complete", { id, action });
   return {
     content: [{ type: "text", text: message }],
+    structuredContent: {
+      resolved: true,
+      id,
+    },
   };
 }
 
@@ -909,6 +926,12 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     logger.flow("memory_read", "complete_batch", { ids_requested: detailIds.length });
     return {
       content: [{ type: "text", text: results.join("\n\n") }],
+      structuredContent: {
+        count: readIds.length,
+        fragments: readIds.map((rid: string) => ({ id: rid })),
+        has_more: false,
+        next_offset: null,
+      },
     };
   }
 
@@ -929,6 +952,12 @@ export async function handleMemoryRead(args?: MemoryReadArgs): Promise<ToolResul
     logger.flow("memory_read", "complete_single", { id: detailId, confidence: boosted.confidence?.toFixed(2) });
     return {
       content: [{ type: "text", text: core.formatMemoryDetail(boosted) }],
+      structuredContent: {
+        count: 1,
+        fragments: [{ id: detailId }],
+        has_more: false,
+        next_offset: null,
+      },
     };
   }
 
@@ -1056,7 +1085,10 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   const fragment = args?.fragment;
   const title = args?.title || null;
   const description = args?.description || null;
-  const project = args?.project === undefined ? null : args.project;
+  // Project scope: explicit `project` wins. If omitted, fall back to the
+  // detected project (cwd basename) so memory is isolated per project by
+  // default. Pass `project: null` explicitly to force global scope.
+  const project = args?.project === undefined ? (core.detectProject() || null) : args.project;
   const source = (args?.source || "ai") as "user" | "ai";
   const validTypes: FragmentType[] = ["fact", "pattern", "lesson", "warning", "context"];
   const fragmentType = validTypes.includes((args?.type || "") as FragmentType)
@@ -1190,6 +1222,11 @@ export async function handleMemoryAdd(args?: MemoryAddArgs): Promise<ToolResult>
   logger.flow("memory_add", "complete", { id: newFragment.id, title: newFragment.title, overlaps: overlaps.length });
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: {
+      success: true,
+      id: newFragment.id,
+      conflicts: conflicts.map((c: any) => ({ id: c.memory_b_id, title: c.memory_b_title })),
+    },
   };
 }
 
@@ -1303,6 +1340,7 @@ export async function handleMemoryUpdate(args?: MemoryUpdateArgs): Promise<ToolR
   logger.flow("memory_update", "complete", { id, title: title || target.title });
   return {
     content: [{ type: "text", text: updateResponse }],
+    structuredContent: { success: true, id },
   };
 }
 
@@ -1339,6 +1377,7 @@ export async function handleMemoryForget(args?: MemoryForgetArgs): Promise<ToolR
   logger.flow("memory_forget", "complete", { id });
   return {
     content: [{ type: "text", text: `Forgot fragment with ID: ${id}` }],
+    structuredContent: { success: true, id },
   };
 }
 
@@ -1385,6 +1424,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     logger.flow("memory_feedback", "complete_positive", { id, confidence: boosted.confidence?.toFixed(2) });
     return {
       content: [{ type: "text", text: `Positive feedback recorded for [${id}]. Confidence boosted to ${boosted.confidence.toFixed(2)}.` }],
+      structuredContent: { success: true, id, confidence: boosted.confidence },
     };
   } else {
     const penalized = core.recordNegativeHit(target);
@@ -1397,6 +1437,7 @@ export async function handleMemoryFeedback(args?: MemoryFeedbackArgs): Promise<T
     logger.flow("memory_feedback", "complete_negative", { id, confidence: penalized.confidence?.toFixed(2) });
     return {
       content: [{ type: "text", text: `Negative feedback recorded for [${id}]. Confidence reduced to ${penalized.confidence.toFixed(2)}.` }],
+      structuredContent: { success: true, id, confidence: penalized.confidence },
     };
   }
 }
@@ -1405,7 +1446,10 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
   const ids = args?.ids;
   const title = args?.title;
   const fragment = args?.fragment;
-  const project = args?.project === undefined ? null : args.project;
+  // Project scope: explicit `project` wins. If omitted, fall back to the
+  // detected project (cwd basename) so memory is isolated per project by
+  // default. Pass `project: null` explicitly to force global scope.
+  const project = args?.project === undefined ? (core.detectProject() || null) : args.project;
 
   logger.flow("memory_merge", "start", { ids, title, project });
 
@@ -1575,6 +1619,11 @@ export async function handleMemoryMerge(args?: MemoryMergeArgs): Promise<ToolRes
 
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: {
+      success: true,
+      id: newLegacyId,
+      merged_ids: ids,
+    },
   };
 }
 
@@ -1647,6 +1696,7 @@ export async function handleMemoryRelate(args?: MemoryRelateArgs): Promise<ToolR
   logger.flow("memory_relate", "complete", { sourceId, targetId, type });
   return {
     content: [{ type: "text", text: `Created relation: [${sourceId}] --${type}--> [${targetId}]${note ? ` (${note})` : ""}` }],
+    structuredContent: { success: true, relation: type },
   };
 }
 
@@ -1803,6 +1853,7 @@ export async function handleGuidePractice(args?: GuidePracticeArgs): Promise<Too
   logger.flow("guide_practice", "complete", { guide: guideName, action, usage_count: updated.usage_count });
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: { success: true, guide: guideName, usage_count: updated.usage_count },
   };
 }
 
@@ -1833,6 +1884,7 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
     guides.upsertGuideToDb(db, existing);
     return {
       content: [{ type: "text", text: `Updated manual for existing guide "${existing.guide}" (${existing.category})` }],
+      structuredContent: { success: true, guide: existing.guide },
     };
   }
 
@@ -1847,6 +1899,7 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
     guides.upsertGuideToDb(db, similar);
     return {
       content: [{ type: "text", text: `Updated manual for existing guide "${similar.guide}" (${similar.category})` }],
+      structuredContent: { success: true, guide: similar.guide },
     };
   }
 
@@ -1858,6 +1911,7 @@ export async function handleGuideCreate(args?: GuideCreateArgs): Promise<ToolRes
   logger.flow("guide_create", "complete", { guide: guideName, category, is_new: true });
   return {
     content: [{ type: "text", text: `Created new guide "${newGuide.guide}" (${newGuide.category}) with a detailed manual.` }],
+    structuredContent: { success: true, guide: newGuide.guide },
   };
 }
 
@@ -1930,6 +1984,7 @@ export async function handleGuideDistill(args?: GuideDistillArgs): Promise<ToolR
   logger.flow("guide_distill", "complete", { memory_id: memoryId, guide: guideName, category });
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: { success: true, guide: updated.guide, memory_id: memoryId },
   };
 }
 
@@ -1999,6 +2054,7 @@ export async function handleGuideUpdate(args?: GuideUpdateArgs): Promise<ToolRes
   logger.flow("guide_update", "complete", { guide: guideName, updated_fields: fieldsToUpdate });
   return {
     content: [{ type: "text", text: `Updated guide "${guide.guide}":\n${guides.formatGuideDetail(guide)}` }],
+    structuredContent: { success: true, guide: guide.guide },
   };
 }
 
@@ -2033,6 +2089,7 @@ export async function handleGuideForget(args?: GuideForgetArgs): Promise<ToolRes
   logger.flow("guide_forget", "complete", { guide: guideName });
   return {
     content: [{ type: "text", text: `Successfully forgot guide: ${guideName}` }],
+    structuredContent: { success: true, guide: guideName },
   };
 }
 
@@ -2129,6 +2186,7 @@ export async function handleGuideMerge(args?: GuideMergeArgs): Promise<ToolResul
   logger.flow("guide_merge", "complete", { new_guide: newGuideName, merged_count: guideNames.length, total_usage: totalUsage });
   return {
     content: [{ type: "text", text: response }],
+    structuredContent: { success: true, guide: newGuideName, merged: guideNames },
   };
 }
 

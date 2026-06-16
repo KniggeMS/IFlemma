@@ -102,10 +102,10 @@ try {
   async function call(toolName, args) {
     return client.callTool({ name: toolName, arguments: args });
   }
-  await call("session_start", { task_type: "debugging", technologies: ["react"] });
-  await call("session_attempt", { approach: "useState derived cache", outcome: "rejected", critique: "re-render loop" });
-  await call("session_end", { outcome: "success", final_approach: "useMemo" });
-  const secondStart = await call("session_start", { task_type: "debugging", technologies: ["react"] });
+  await call("lemma_session_start", { task_type: "debugging", technologies: ["react"] });
+  await call("lemma_session_attempt", { approach: "useState derived cache", outcome: "rejected", critique: "re-render loop" });
+  await call("lemma_session_end", { outcome: "success", final_approach: "useMemo" });
+  const secondStart = await call("lemma_session_start", { task_type: "debugging", technologies: ["react"] });
   const recallText = (secondStart.content?.[0]?.text) || "";
   check("continuity recall surfaces prior dead end", recallText.includes("useState derived cache"));
   check("continuity recall has Dead ends heading", recallText.includes("Dead ends"));
