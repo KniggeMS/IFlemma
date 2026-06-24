@@ -19,6 +19,20 @@ Ziel: Lemma wird zum stärksten lokalen MCP-Memory-System für Solo-Developer un
 
 ---
 
+## Trust Hierarchy (Master-Definition)
+
+> **Diese Definition ist die einzige Quelle der Wahrheit.** Alle anderen Dokumente (retrieval.md, verification.md) referenzieren diese Hierarchie.
+
+| Level | Bedeutung | Ranking-Boost |
+|---|---|---|
+| `user_stated` | Vom Nutzer explizit bestätigt oder formuliert | +0.4 |
+| `code_verified` | Aus verifiziertem Code-Kontext abgeleitet | +0.3 |
+| `session_agreed` | In einer Session explizit bestätigt (nicht dauerhaft) | +0.2 |
+| `session_inferred` | Aus Session-Kontext abgeleitet | +0.1 |
+| `derived_pattern` | Automatisch generiertes Pattern ohne Bestätigung | 0.0 |
+
+---
+
 ## Phasen
 
 ### V2.1 — Retrieval modernisieren
@@ -29,7 +43,7 @@ Ziel: Lemma wird zum stärksten lokalen MCP-Memory-System für Solo-Developer un
 |---|---|---|
 | `sqlite-vec` Vektorindex ergänzen | YesMem | P0 |
 | Hybrid Ranking: BM25 + Vector + RRF | YesMem | P0 |
-| Trust-gewichtetes Ranking | YesMem | P1 |
+| Trust-gewichtetes Ranking (siehe Trust Hierarchy oben) | YesMem | P1 |
 | Goal-scoped Retrieval (nur für aktive Session) | Jumbo | P1 |
 | Embedding-Generation lokal (z.B. `@xenova/transformers`) | — | P2 |
 
@@ -52,7 +66,7 @@ CREATE TABLE memory_embeddings (
 
 | Feature | Quelle | Prio |
 |---|---|---|
-| Trust Hierarchy: `user_stated > code_verified > session_inferred > derived_pattern` | YesMem | P0 |
+| Trust Hierarchy: `user_stated > code_verified > session_agreed > session_inferred > derived_pattern` (siehe Master-Definition oben) | YesMem | P0 |
 | Evidence Table: Datei-/Symbol-/Commit-Referenz | Kage | P0 |
 | `memory_validity` Status: `verified / stale / superseded / conflicted` | Kage | P1 |
 | Stale-Detection bei Dateiänderungen (light) | Kage | P1 |
@@ -166,6 +180,85 @@ CREATE TABLE memory_revisions (
 | `lemma_memory_invalidate` | Lifecycle | V2.4 |
 | `lemma_memory_revision_history` | Lifecycle | V2.4 |
 | `lemma_eval_run` | Evals | V2.5 |
+
+### Tool-Dokumentation
+
+#### `lemma_memory_verify`
+Manuelle Verifikation eines Fragments mit Code-Referenz.
+```json
+{
+  "fragment_id": "abc123",
+  "evidence": {
+    "source_type": "file",
+    "path": "src/db/schema.ts",
+    "symbol": "createMemoriesTable"
+  }
+}
+```
+
+#### `lemma_memory_evidence_add`
+Fügt einem bestehenden Memory-Fragment einen Evidence-Eintrag hinzu, ohne das Fragment selbst zu verändern. Erhöht den Trust-Level falls der neue Evidence höher ist als der bisherige.
+
+```json
+{
+  "fragment_id": "abc123",
+  "source_type": "commit",
+  "commit_sha": "d4f8a1b",
+  "path": "src/retrieval/hybrid.ts",
+  "symbol": "rrfScore",
+  "snippet_hash": "sha256:e3b0c44298fc...",
+  "trust_level": "code_verified"
+}
+```
+
+**Parameter:**
+| Feld | Typ | Pflicht | Beschreibung |
+|---|---|---|---|
+| `fragment_id` | `string` | ✓ | ID des zu belegenden Memory-Fragments |
+| `source_type` | `'file' \| 'symbol' \| 'commit' \| 'url' \| 'user'` | ✓ | Art der Evidenzquelle |
+| `path` | `string` | — | Dateipfad relativ zum Projekt-Root |
+| `symbol` | `string` | — | Funktions- oder Klassenname |
+| `commit_sha` | `string` | — | Git-Commit-SHA der Referenz |
+| `snippet_hash` | `string` | — | SHA-256 des relevanten Code-Snippets (für Stale-Detection) |
+| `trust_level` | `TrustLevel` | ✓ | Trust-Level dieser Evidence (siehe Master-Definition oben) |
+
+**Verhalten:**
+- Erzeugt einen neuen Eintrag in `memory_evidence`
+- Setzt `memory_validity.status = 'verified'` wenn `trust_level >= code_verified`
+- Aktualisiert den Trust-Level des Fragments falls neuer Evidence höher ist
+- Löst keine Stale-Detection aus (das ist Aufgabe von `lemma_memory_verify`)
+
+#### `lemma_memory_invalidate`
+Explizites Markieren als stale oder superseded:
+```json
+{
+  "fragment_id": "abc123",
+  "reason": "Funktion wurde in Refactoring umbenannt"
+}
+```
+
+#### `lemma_goal_create`
+Erstellt ein neues Goal-Packet für eine Session:
+```json
+{
+  "title": "Hybrid Retrieval implementieren",
+  "description": "sqlite-vec einbinden und RRF-Ranking umsetzen",
+  "criteria": [
+    "Alle bestehenden Tests grün",
+    "Latenz < 50ms bei 1000 Fragmenten",
+    "Fallback auf FTS5-only funktioniert"
+  ]
+}
+```
+
+#### `lemma_goal_context`
+Gibt das kuratierte Kontextpaket für ein aktives Goal zurück — nur die relevantesten Memories, Guides und Warnings für genau dieses Ziel.
+```json
+{
+  "goal_id": "goal_xyz",
+  "max_tokens": 4000
+}
+```
 
 ---
 
