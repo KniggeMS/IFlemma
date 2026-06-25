@@ -1,0 +1,50 @@
+name: Create labels
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create_labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create missing labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'type:feature', color: 'a2eeef', description: 'Neues Feature' },
+              { name: 'type:bug', color: 'd73a4a', description: 'Fehler' },
+              { name: 'type:refactor', color: 'e4e669', description: 'Refactoring' },
+              { name: 'type:docs', color: '0075ca', description: 'Dokumentation' },
+              { name: 'type:test', color: '0e8a16', description: 'Tests' },
+
+              { name: 'priority:p0', color: 'b60205', description: 'Kritisch / Blocker' },
+              { name: 'priority:p1', color: 'd93f0b', description: 'Hoch' },
+              { name: 'priority:p2', color: 'e4e669', description: 'Normal' },
+              { name: 'priority:p3', color: 'cfd3d7', description: 'Nice to have' },
+
+              { name: 'status:blocked', color: 'b60205', description: 'Wartet auf externe Abhängigkeit' },
+              { name: 'status:in-progress', color: '0075ca', description: 'Wird aktiv bearbeitet' },
+              { name: 'status:needs-review', color: '5319e7', description: 'Wartet auf Review' },
+              { name: 'good first issue', color: '7057ff', description: 'Gut für Einsteiger' },
+            ];
+
+            for (const l of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: l.name,
+                  color: l.color,
+                  description: l.description,
+                });
+                console.log(`Created label: ${l.name}`);
+              } catch (err) {
+                if (err.status === 422) {
+                  console.log(`Label already exists: ${l.name}`);
+                } else {
+                  console.log(`Error creating ${l.name}: ${err.message}`);
+                  throw err;
+                }
+              }
+            }
