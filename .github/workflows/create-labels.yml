@@ -3,12 +3,17 @@ name: Create labels
 on:
   workflow_dispatch:
 
+# WICHTIG: gibt dem GITHUB_TOKEN die benötigte Berechtigung, Labels/Issues zu schreiben
+permissions:
+  issues: write
+
 jobs:
   create_labels:
     runs-on: ubuntu-latest
     steps:
       - name: Create missing labels
-        uses: actions/github-script@v7
+        # v6 vermeidet die Node.js-20-Deprecation-Warnung bei manchen Runners
+        uses: actions/github-script@v6
         with:
           script: |
             const labels = [
