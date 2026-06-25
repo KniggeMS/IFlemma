@@ -257,4 +257,24 @@ CREATE TABLE IF NOT EXISTS improvement_suggestions (
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON improvement_suggestions(status);
 `;
 
-export const MIGRATIONS: [number, string][] = [[1, SCHEMA_V1], [2, SCHEMA_V2]];
+export const SCHEMA_V3 = `
+-- sqlite-vec virtual table: 384-dim embeddings (all-MiniLM-L6-v2)
+-- Each row links a memory_id to its float32 embedding vector.
+-- vec0 requires the PRIMARY KEY column to be the first column.
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
+  memory_id INTEGER PRIMARY KEY,
+  embedding FLOAT[384]
+);
+
+-- Track which embedding model version generated the stored vector.
+-- NULL = no embedding yet (pending backfill).
+ALTER TABLE memories ADD COLUMN embedding_version TEXT DEFAULT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memories_embedding_version ON memories(embedding_version);
+`;
+
+export const MIGRATIONS: [number, string][] = [
+  [1, SCHEMA_V1],
+  [2, SCHEMA_V2],
+  [3, SCHEMA_V3],
+];
