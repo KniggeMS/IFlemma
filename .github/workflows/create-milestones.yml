@@ -1,0 +1,84 @@
+name: Create V2 Milestones (einmalig)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Milestones anlegen? (yes)'
+        required: true
+        default: 'yes'
+
+jobs:
+  create-milestones:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create V2.1 Retrieval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createMilestone({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'V2.1 Retrieval',
+              description: 'Hybrid Search (BM25 + sqlite-vec + RRF), Trust-gewichtetes Ranking, Goal-scoped Retrieval'
+            });
+            console.log('V2.1 Retrieval erstellt');
+
+      - name: Create V2.2 Verification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createMilestone({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'V2.2 Verification',
+              description: 'Trust Hierarchy, Evidence Table, Stale Detection, Symbol-Hash-Check'
+            });
+            console.log('V2.2 Verification erstellt');
+
+      - name: Create V2.3 Workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createMilestone({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'V2.3 Workflow',
+              description: 'Goal Packets, Review/Codify Loop, Entity-Extraktion'
+            });
+            console.log('V2.3 Workflow erstellt');
+
+      - name: Create V2.4 Lifecycle
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createMilestone({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'V2.4 Lifecycle',
+              description: 'Revision History, Insight Cards, Forgetting Model, Memory Invalidation'
+            });
+            console.log('V2.4 Lifecycle erstellt');
+
+      - name: Create V2.5 Evals
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createMilestone({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'V2.5 Evals',
+              description: 'Eval Harness, Recall@5, Task-Success, Staleness-Rate, Regression Suite'
+            });
+            console.log('V2.5 Evals erstellt');
+
+      - name: Zusammenfassung
+        run: |
+          echo "Alle 5 Milestones wurden erstellt:"
+          echo "  - V2.1 Retrieval"
+          echo "  - V2.2 Verification"
+          echo "  - V2.3 Workflow"
+          echo "  - V2.4 Lifecycle"
+          echo "  - V2.5 Evals"
