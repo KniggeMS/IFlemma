@@ -1,0 +1,55 @@
+name: "✨ Feature Request"
+description: "Neues Feature vorschlagen"
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem / Motivation"
+      description: "Welches Problem löst dieses Feature?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Vorgeschlagene Lösung"
+      description: "Wie soll das Feature funktionieren?"
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: "V2-Phase"
+      options:
+        - "V2.1 Retrieval"
+        - "V2.2 Verification"
+        - "V2.3 Workflow"
+        - "V2.4 Lifecycle"
+        - "V2.5 Evals"
+        - "Backlog / unklar"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Bereich"
+      options:
+        - "area:retrieval"
+        - "area:db"
+        - "area:mcp"
+        - "area:security"
+        - "area:guides"
+        - "area:sessions"
+        - "area:evals"
+    validations:
+      required: true
+  - type: textarea
+    id: db_impact
+    attributes:
+      label: "DB-Migration notwendig?"
+      description: "Werden neue Tabellen oder Schema-Änderungen benötigt?"
+  - type: textarea
+    id: mcp_impact
+    attributes:
+      label: "MCP-Tool-Auswirkung"
+      description: "Werden neue Tools hinzugefügt oder bestehende verändert?"
